@@ -35,7 +35,7 @@ function TopBarBase(p: TopBarProps) {
     <header className="topbar">
       <div className="brand">
         <span className="livedot" aria-hidden="true" />
-        WORLD WATCHOUT
+        VANTAGE
         <small className="hide-sm">energy · industry · markets</small>
       </div>
       <div className="clock mono" title="Coordinated Universal Time">

@@ -34,7 +34,7 @@ const parser = new Parser<Record<string, unknown>, RawItem>({
 });
 
 const UA =
-  "Mozilla/5.0 (compatible; WorldWatchout/1.0; +https://github.com/alaaeddine-ahriz/world-watchout)";
+  "Mozilla/5.0 (compatible; Vantage/1.0; +https://github.com/alaaeddine-ahriz/world-watchout)";
 
 export function stripHtml(html: string): string {
   const text = html

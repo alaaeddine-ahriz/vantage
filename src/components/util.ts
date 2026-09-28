@@ -435,17 +435,17 @@ export function exportCsv(items: NewsItem[]) {
   };
   const head = ["publishedAt", "title", "source", "publisher", "region", "lang", "lane", "link", "summary"];
   const rows = items.map((i) => [i.publishedAt, i.title, i.source, i.publisher, i.region, i.lang, i.lane, i.link, i.summary].map(esc).join(","));
-  download(`world-watchout-saved-${stamp()}.csv`, [head.join(","), ...rows].join("\r\n"), "text/csv;charset=utf-8");
+  download(`vantage-saved-${stamp()}.csv`, [head.join(","), ...rows].join("\r\n"), "text/csv;charset=utf-8");
 }
 
 export function exportMd(items: NewsItem[]) {
-  const lines = [`# World Watchout: saved items`, ``, `Exported ${new Date().toISOString()} (${items.length} items)`, ``];
+  const lines = [`# Vantage: saved items`, ``, `Exported ${new Date().toISOString()} (${items.length} items)`, ``];
   for (const i of items) {
     const who = i.publisher ? `${i.publisher} via ${i.source}` : i.source;
     const when = (i.publishedAt || "").slice(0, 16).replace("T", " ");
     lines.push(`- [${i.title.replace(/[[\]]/g, " ")}](${i.link}) (${who}, ${when || "unknown time"} UTC, ${i.lane})`);
   }
-  download(`world-watchout-saved-${stamp()}.md`, lines.join("\n") + "\n", "text/markdown;charset=utf-8");
+  download(`vantage-saved-${stamp()}.md`, lines.join("\n") + "\n", "text/markdown;charset=utf-8");
 }
 
 export interface MediaQueryState {

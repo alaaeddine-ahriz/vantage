@@ -1,8 +1,8 @@
-# World Watchout
+# Vantage
 
 A control center for world news, built for market research in energy and industry. It pulls about 90 live RSS wires, sorts every headline into one of six lanes, runs a market ticker across the top, highlights the terms you are watching and keeps the items you star. On top of that it tags every headline with countries, companies, commodities, organisations and topics, and turns those tags into a globe, a force graph and a set of explainable patterns, all computed in the browser. A Countries view adds a data card per country (World Bank and IMF WEO), a compare table and a screener. No accounts, no database, no API key required: a Next.js app that fetches public feeds and public quote endpoints and stores your preferences in the browser. One optional key (`ANTHROPIC_API_KEY`) enables the AI brief.
 
-![World Watchout desktop view: ticker, filter sidebar, six lane columns, watchlist and source health](docs/screenshot-desktop.png)
+![Vantage desktop view: ticker, filter sidebar, six lane columns, watchlist and source health](docs/screenshot-desktop.png)
 
 ![Globe view: mention intensity per country, lane-coloured points and flow arcs](docs/screenshot-globe.png)
 

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "World Watchout",
+  title: "Vantage",
   description: "Live control center for world energy, industry and market news, built for market research.",
   icons: { icon: "/favicon.svg" },
 };

@@ -169,6 +169,8 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
   const fgRef = useRef<FGMethods | undefined>(undefined);
   const nodePool = useRef(new Map<string, GNode>());
   const lastClick = useRef<{ id: string; t: number }>({ id: "", t: 0 });
+  /** zoomToFit runs once, when the first layout settles; later refreshes keep the user's zoom. */
+  const fitted = useRef(false);
 
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [palette, setPalette] = useState<Palette>(FALLBACK);
@@ -498,6 +500,11 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
   const onNodeHover = useCallback((n: GNode | null) => setHoverId(n ? n.id : null), []);
 
   const fit = useCallback(() => fgRef.current?.zoomToFit(600, 40), []);
+  const onEngineStop = useCallback(() => {
+    if (fitted.current) return;
+    fitted.current = true;
+    fgRef.current?.zoomToFit(400, 40);
+  }, []);
   const zoomBy = useCallback((f: number) => {
     const fg = fgRef.current;
     if (!fg) return;
@@ -581,6 +588,7 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
             onNodeClick={onNodeClick}
             onNodeHover={onNodeHover}
             onBackgroundClick={onBackgroundClick}
+            onEngineStop={onEngineStop}
           />
         )}
         {graphData.nodes.length === 0 && <div className={s.empty}>no entities in this window yet</div>}

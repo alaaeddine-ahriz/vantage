@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { extractEntities } from "../src/lib/entities";
 import { GAZETTEER } from "../src/lib/gazetteer";
-import { buildIntel, resetIntelCache } from "../src/lib/intel";
-import type { IntelItem } from "../src/lib/intel-types";
+import { buildIntel, clusterScoreOf, coMovementScoreOf, emergingScoreOf, rankPatterns, resetIntelCache, spikeScoreOf } from "../src/lib/intel";
+import type { IntelItem, Pattern } from "../src/lib/intel-types";
 import { mockFeeds } from "../src/lib/mock";
 import { fold } from "../src/lib/text";
 
@@ -126,6 +126,80 @@ test("buildIntel: mock feed yields points, flows, graph and patterns", () => {
       .map((p) => p.title)
       .join(" | ")})`,
   );
+});
+
+test("pattern scores: bounded in [0, 1] and not saturated by tiny counts", () => {
+  const within = (v: number) => v >= 0 && v <= 1;
+  for (let recent = 0; recent <= 40; recent++) {
+    for (const baseline of [0, 0.5, 1, 3, 10]) assert.ok(within(spikeScoreOf(recent, baseline)), `spike(${recent}, ${baseline})`);
+    assert.ok(within(emergingScoreOf(recent)), `emerging(${recent})`);
+    assert.ok(within(clusterScoreOf(recent)), `cluster(${recent})`);
+    for (const other of [0, 3, 6, 20]) assert.ok(within(coMovementScoreOf(recent, other, 6)), `co-movement(${recent}, ${other})`);
+  }
+  /* three mentions against a quiet week is a weak spike, not a 100 */
+  assert.ok(spikeScoreOf(3, 0) < 0.5, `spike(3, 0) = ${spikeScoreOf(3, 0)}`);
+  assert.ok(spikeScoreOf(8, 0) > spikeScoreOf(3, 0), "more mentions, higher spike");
+  assert.equal(spikeScoreOf(12, 0), 1);
+  assert.ok(spikeScoreOf(6, 3) < spikeScoreOf(6, 0), "a higher baseline lowers the spike");
+  assert.equal(spikeScoreOf(2, 4), 0, "below baseline is zero");
+  /* one shared headline between two thinly mentioned entities is far from 100 */
+  assert.ok(coMovementScoreOf(1, 3, 3) <= 0.1, `co-movement(1, 3, 3) = ${coMovementScoreOf(1, 3, 3)}`);
+  assert.ok(coMovementScoreOf(2, 3, 3) < 0.25, `co-movement(2, 3, 3) = ${coMovementScoreOf(2, 3, 3)}`);
+  assert.equal(coMovementScoreOf(5, 6, 9), 1);
+  assert.equal(emergingScoreOf(3), 0.5);
+  assert.equal(clusterScoreOf(4), 0.5);
+});
+
+test("rankPatterns: score order with no kind above 40% of the first 10", () => {
+  const mk = (kind: Pattern["kind"], i: number, score: number): Pattern => ({
+    id: `${kind}:${i}`, kind, title: kind, detail: "", score, entityIds: [], itemIds: [],
+  });
+  const list: Pattern[] = [];
+  for (let i = 0; i < 25; i++) list.push(mk("co-movement", i, 1));
+  for (let i = 0; i < 6; i++) list.push(mk("spike", i, 0.9 - i * 0.05));
+  for (let i = 0; i < 3; i++) list.push(mk("emerging", i, 0.5));
+  for (let i = 0; i < 3; i++) list.push(mk("cluster", i, 0.4));
+  const ranked = rankPatterns(list);
+  assert.equal(ranked.length, list.length, "nothing dropped");
+  assert.equal(new Set(ranked.map((p) => p.id)).size, list.length, "nothing duplicated");
+  const head = ranked.slice(0, 10);
+  const perKind = new Map<string, number>();
+  for (const p of head) perKind.set(p.kind, (perKind.get(p.kind) ?? 0) + 1);
+  for (const [kind, n] of perKind) assert.ok(n <= 4, `${kind} takes ${n} of the first 10`);
+  assert.deepEqual([...perKind.entries()], [["co-movement", 4], ["spike", 4], ["emerging", 2]], "head fills by score under the cap");
+  assert.equal(ranked[0].kind, "co-movement", "the top score still leads");
+  /* inside one kind the score order is kept */
+  const spikes = ranked.filter((p) => p.kind === "spike").map((p) => p.score);
+  assert.deepEqual(spikes, [...spikes].sort((a, b) => b - a));
+  /* after the head the deferred entries follow in score order */
+  const tail = ranked.slice(10).map((p) => p.score);
+  assert.deepEqual(tail, [...tail].sort((a, b) => b - a));
+  /* a single kind is passed through untouched */
+  const only = rankPatterns(list.filter((p) => p.kind === "co-movement"));
+  assert.equal(only.length, 25);
+});
+
+test("buildIntel: co-movement needs 3 mentions each and 2 shared headlines", () => {
+  resetIntelCache();
+  const now = Date.now();
+  const mk = (id: string, title: string, hoursAgo: number): IntelItem => ({
+    id, title, link: "", summary: "", publishedAt: new Date(now - hoursAgo * 3_600_000).toISOString(), sourceId: "t", source: "t",
+    region: "global", lang: "en", lanes: ["oilgas"], lane: "oilgas", ts: now - hoursAgo * 3_600_000,
+  });
+  /* one shared headline, three mentions each: no co-movement */
+  const thin = [
+    mk("a1", "Qatar and LNG exports climb", 1),
+    mk("a2", "Qatar budget update", 2), mk("a3", "Qatar election", 3),
+    mk("a4", "LNG prices in Asia", 4), mk("a5", "LNG tanker rates", 5),
+  ];
+  const s1 = buildIntel(thin, { now });
+  assert.ok(!s1.patterns.some((p) => p.kind === "co-movement"), "single shared headline is not co-movement");
+  /* two shared headlines: co-movement, with a modest score */
+  const s2 = buildIntel([...thin, mk("a6", "Qatar signs new LNG deal", 6)], { now });
+  const co = s2.patterns.find((p) => p.kind === "co-movement");
+  assert.ok(co, "co-movement found");
+  assert.ok(co!.score > 0 && co!.score < 0.5, `modest score: ${co!.score}`);
+  for (const p of s2.patterns) assert.ok(p.score >= 0 && p.score <= 1, `${p.id} score in range`);
 });
 
 test("buildIntel: 1150 items under 300 ms, cached rerun faster", () => {

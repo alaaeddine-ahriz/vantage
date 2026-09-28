@@ -69,6 +69,8 @@ function mergeBriefIntoGraph(snapshot: IntelSnapshot, brief: Brief | null): Inte
   if (!brief || !brief.links.length) return snapshot.graph;
   const nodes = new Map(snapshot.graph.nodes.map((n) => [n.id, n]));
   const links: GraphLink[] = [...snapshot.graph.links];
+  /* one link per source, target and kind: a brief that repeats a relation does not stack edges */
+  const seen = new Set(links.map((l) => `${l.source}|${l.target}|${l.kind}`));
   const nodeFor = (label: string, itemIds: string[]): string => {
     const eid = resolveEntity(label, snapshot);
     if (eid) {
@@ -88,6 +90,9 @@ function mergeBriefIntoGraph(snapshot: IntelSnapshot, brief: Brief | null): Inte
     const source = nodeFor(l.source, l.itemIds);
     const target = nodeFor(l.target, l.itemIds);
     if (source === target) continue;
+    const key = `${source}|${target}|${l.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     links.push({ source, target, kind: l.kind, weight: 1, label: l.label, itemIds: l.itemIds, ai: true });
   }
   return { nodes: [...nodes.values()], links };
@@ -397,6 +402,8 @@ export default function Dashboard() {
 
   /* ---------- AI brief: the currently visible items, newest first, capped, with the local patterns and watchlist */
   const briefAbort = useRef<AbortController | null>(null);
+  /* a brief still in flight when the dashboard unmounts is dropped, not applied to a gone tree */
+  useEffect(() => () => briefAbort.current?.abort(), []);
   const generateBrief = useCallback(async () => {
     if (!viewSnapshot || briefState === "loading") return;
     const list = visible.slice(0, BRIEF_ITEMS);

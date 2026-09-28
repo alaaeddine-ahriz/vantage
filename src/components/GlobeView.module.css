@@ -43,10 +43,36 @@
 }
 
 .legendTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text);
+}
+
+.legendClose {
+  padding: 0 4px;
+  border: 0;
+  font-size: 11px;
+  color: var(--muted);
+  background: none;
+}
+
+/* collapsed one-line legend on phones: a button, so it takes the tap */
+.legendMini {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  max-width: none;
+  padding: 5px 8px;
+  white-space: nowrap;
+  color: var(--muted);
+  cursor: pointer;
+  pointer-events: auto;
+  text-align: left;
 }
 
 .lanes {
@@ -191,6 +217,7 @@
     border-bottom: 0;
   }
   .legend {
-    max-width: 160px;
+    max-width: 200px;
+    pointer-events: auto;
   }
 }

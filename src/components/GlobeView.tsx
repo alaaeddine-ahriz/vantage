@@ -9,7 +9,7 @@ import land from "world-atlas/countries-110m.json";
 import type { LaneId } from "@/lib/types";
 import { LANES } from "@/lib/types";
 import type { Flow, GeoPoint } from "@/lib/intel-types";
-import { LANE_BY_ID, relativeTime, useNow } from "./util";
+import { LANE_BY_ID, relativeTime, useMediaQuery, useNow } from "./util";
 import css from "./GlobeView.module.css";
 
 export interface GlobeViewProps {
@@ -148,8 +148,37 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&
 const GLOBE_COLOR = { dark: "#0e1620", light: "#e6edf5" } as const;
 const ATMOSPHERE_COLOR = { dark: "#6b7f99", light: "#8fa3ba" } as const;
 const MAX_ARCS = 120;
-const MAX_LABELS = 12;
+const MAX_LABELS = 8;
+/** Two labels closer than this (great-circle degrees) would overprint; the lower count is dropped. */
+const LABEL_MIN_SEPARATION_DEG = 6;
+/** Labels only show once the camera is closer than this altitude (the overview sits at exactly 2.2). */
+const LABEL_MAX_ALTITUDE = 2.2;
+const OVERVIEW_ALTITUDE = 2.2;
 const HEADLINES = 12;
+/** Alpha for points and arcs that do not touch the selected country. */
+const DIM_ALPHA = 0.25;
+
+const toRad = (d: number) => (d * Math.PI) / 180;
+/** Great-circle distance in degrees (haversine). */
+function angularDistance(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return (2 * Math.asin(Math.min(1, Math.sqrt(h))) * 180) / Math.PI;
+}
+
+/** Greedy by count: a label is kept only when every label already kept is at least LABEL_MIN_SEPARATION_DEG away. */
+export function pickLabels<T extends { lat: number; lng: number; count: number }>(points: T[], max = MAX_LABELS, minSep = LABEL_MIN_SEPARATION_DEG): T[] {
+  const sorted = [...points].sort((a, b) => b.count - a.count);
+  const out: T[] = [];
+  for (const p of sorted) {
+    if (out.length >= max) break;
+    if (out.every((q) => angularDistance(p.lat, p.lng, q.lat, q.lng) >= minSep)) out.push(p);
+  }
+  return out;
+}
+
+const labelsVisibleAt = (altitude: number) => altitude < LABEL_MAX_ALTITUDE - 0.01;
 
 function hasWebGL(): boolean {
   try {
@@ -172,7 +201,12 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
   const interactedRef = useRef(false);
   const onSelectRef = useRef(onSelectCountry);
   const pointsRef = useRef(points);
+  const labelDataRef = useRef<{ iso2: string; text: string; lat: number; lng: number; count: number }[]>([]);
+  /** Whether the camera is close enough for labels; flipped by globe.gl's onZoom. */
+  const labelsOnRef = useRef(false);
   const [status, setStatus] = useState<Status>("loading");
+  const [legendOpen, setLegendOpen] = useState(false);
+  const { match: compact } = useMediaQuery("(max-width: 640px)");
   const now = useNow(60_000);
 
   onSelectRef.current = onSelectCountry;
@@ -213,10 +247,10 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
   }, [flows]);
 
   const labelData = useMemo(
-    () => [...points].sort((a, b) => b.count - a.count).slice(0, MAX_LABELS)
-      .map((p) => ({ iso2: p.iso2, text: p.label, lat: p.lat, lng: p.lng, count: p.count })),
+    () => pickLabels(points).map((p) => ({ iso2: p.iso2, text: p.label, lat: p.lat, lng: p.lng, count: p.count })),
     [points],
   );
+  labelDataRef.current = labelData;
 
   const laneCounts = useMemo(() => {
     const out = {} as Record<LaneId, number>;
@@ -242,9 +276,23 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
     });
     g.polygonStrokeColor((d: CountryFeature) =>
       d.properties.iso2 && d.properties.iso2 === selectedRef.current ? pal.accent : "rgba(255,255,255,0.12)");
-    g.pointColor((d: { lane: LaneId }) => pal.lanes[d.lane]);
-    g.arcColor((d: { lane: LaneId }) => [withAlpha(pal.lanes[d.lane], 0.25), withAlpha(pal.lanes[d.lane], 0.85)]);
+    /* with a country selected, everything that does not touch it fades to DIM_ALPHA */
+    g.pointColor((d: { lane: LaneId; iso2: string }) => {
+      const sel = selectedRef.current;
+      return sel && d.iso2 !== sel ? withAlpha(pal.lanes[d.lane], DIM_ALPHA) : pal.lanes[d.lane];
+    });
+    g.arcColor((d: { lane: LaneId; from: string; to: string }) => {
+      const sel = selectedRef.current;
+      const c = pal.lanes[d.lane];
+      if (sel && d.from !== sel && d.to !== sel) return [withAlpha(c, DIM_ALPHA * 0.3), withAlpha(c, DIM_ALPHA)];
+      return [withAlpha(c, 0.25), withAlpha(c, 0.85)];
+    });
     g.labelColor(() => withAlpha(pal.text, 0.85));
+  };
+
+  /** Pushes the label set, or nothing while the camera is too far out. */
+  const syncLabels = (g: NonNullable<typeof globeRef.current>) => {
+    g.labelsData(labelsOnRef.current ? labelDataRef.current : []);
   };
 
   /* ---------- create the globe once */
@@ -307,10 +355,18 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
         })
         .onPointClick((d: { iso2: string }) => onSelectRef.current?.(d.iso2 || null))
         .onLabelClick((d: { iso2: string }) => onSelectRef.current?.(d.iso2 || null))
-        .onGlobeClick(() => onSelectRef.current?.(null));
+        .onGlobeClick(() => onSelectRef.current?.(null))
+        .onZoom((pov: { altitude: number }) => {
+          const on = labelsVisibleAt(pov.altitude);
+          if (on === labelsOnRef.current) return;
+          labelsOnRef.current = on;
+          syncLabels(g);
+        });
 
       applyStyle(g, pal, theme, maxCount);
-      g.pointsData(pointData).arcsData(arcData).labelsData(labelData);
+      g.pointsData(pointData).arcsData(arcData);
+      labelsOnRef.current = labelsVisibleAt(OVERVIEW_ALTITUDE);
+      syncLabels(g);
 
       const controls = g.controls();
       controls.autoRotate = !selectedRef.current;
@@ -328,7 +384,7 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
         g.width(Math.max(1, Math.floor(r.width))).height(Math.max(1, Math.floor(r.height)));
       };
       size();
-      g.pointOfView({ lat: 25, lng: 10, altitude: 2.2 }, 0);
+      g.pointOfView({ lat: 25, lng: 10, altitude: OVERVIEW_ALTITUDE }, 0);
       if (typeof ResizeObserver !== "undefined") {
         ro = new ResizeObserver(size);
         ro.observe(host);
@@ -371,7 +427,8 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
     const pal = paletteRef.current ?? readPalette();
     /* fresh accessors so the cap colour rescales with the new maximum */
     applyStyle(g, pal, theme, maxCount);
-    g.pointsData(pointData).arcsData(arcData).labelsData(labelData);
+    g.pointsData(pointData).arcsData(arcData);
+    syncLabels(g);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointData, arcData, labelData, maxCount, status]);
 
@@ -381,14 +438,15 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
     const g = globeRef.current;
     if (!g || status !== "ready") return;
     const pal = paletteRef.current ?? readPalette();
-    g.polygonStrokeColor((d: CountryFeature) =>
-      d.properties.iso2 && d.properties.iso2 === selected ? pal.accent : "rgba(255,255,255,0.12)");
+    /* fresh accessors: the stroke follows the selection and the points and arcs dim around it */
+    applyStyle(g, pal, theme, maxCount);
     const controls = g.controls();
     controls.autoRotate = !selected && !interactedRef.current;
     if (!selected) return;
     const p = byIso.get(selected);
     const target = p ?? countries().find((c) => c.properties.iso2 === selected)?.properties;
     if (target) g.pointOfView({ lat: target.lat, lng: target.lng, altitude: 1.6 }, 800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, status, byIso]);
 
   /* ---------- overlay list for the selected country */
@@ -412,19 +470,32 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
       {status === "loading" && <div className={css.placeholder}>loading globe</div>}
       {status === "nowebgl" && <div className={css.placeholder}>WebGL not available</div>}
 
-      <div className={css.legend} aria-hidden="true">
-        <div className={css.legendTitle}>mentions in window</div>
-        <div className={css.lanes}>
-          {LANES.map((l) => (
-            <span key={l.id} className={`${css.lane} lc-${l.id}`}>
-              <i className={css.dot} />
-              {l.short} <span className="cnt">{laneCounts[l.id]}</span>
-            </span>
-          ))}
+      {compact && !legendOpen ? (
+        <button type="button" className={`${css.legend} ${css.legendMini}`} onClick={() => setLegendOpen(true)} aria-expanded={false} aria-label="show legend">
+          mentions {"\u00b7"} flows <span className="cnt">{flows.length}</span>
+        </button>
+      ) : (
+        <div className={css.legend} aria-hidden={!compact}>
+          <div className={css.legendTitle}>
+            mentions in window
+            {compact && (
+              <button type="button" className={css.legendClose} onClick={() => setLegendOpen(false)} aria-label="hide legend">
+                x
+              </button>
+            )}
+          </div>
+          <div className={css.lanes}>
+            {LANES.map((l) => (
+              <span key={l.id} className={`${css.lane} lc-${l.id}`}>
+                <i className={css.dot} />
+                {l.short} <span className="cnt">{laneCounts[l.id]}</span>
+              </span>
+            ))}
+          </div>
+          <div>flows: <span className="cnt">{flows.length}</span>{flows.length > MAX_ARCS ? ` (${MAX_ARCS} drawn)` : ""}</div>
+          <div className={css.hint}>{compact ? "tap a country to filter" : "click a country to filter"}</div>
         </div>
-        <div>flows: <span className="cnt">{flows.length}</span>{flows.length > MAX_ARCS ? ` (${MAX_ARCS} drawn)` : ""}</div>
-        <div className={css.hint}>click a country to filter</div>
-      </div>
+      )}
 
       {selected && (
         <aside className={css.sheet} aria-label={`headlines for ${selectedName}`}>

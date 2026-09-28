@@ -84,6 +84,63 @@ function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+// ---------------------------------------------------------------- pattern scoring
+
+const MAX_PATTERNS = 25;
+/** In the first DIVERSITY_HEAD emitted patterns no kind may take more than DIVERSITY_SHARE of the slots. */
+const DIVERSITY_HEAD = 10;
+const DIVERSITY_SHARE = 0.4;
+const CO_MIN_RECENT = 3;
+const CO_MIN_SHARED = 2;
+
+/** Lift over baseline, damped so three mentions against a quiet week do not read as a full-score spike. */
+export function spikeScoreOf(recent: number, baseline: number): number {
+  const lift = Math.min(1, (recent - baseline) / Math.max(4, 2 * baseline));
+  return Math.max(0, lift) * Math.min(1, recent / 8);
+}
+
+export function emergingScoreOf(recent48: number): number {
+  return Math.min(1, recent48 / 6);
+}
+
+export function clusterScoreOf(shared: number): number {
+  return Math.min(1, shared / 8);
+}
+
+export function coMovementScoreOf(shared: number, recentA: number, recentB: number): number {
+  return Math.min(1, shared / 5) * Math.min(1, Math.min(recentA, recentB) / 6);
+}
+
+/**
+ * Score order with kind diversity: the list is sorted by score, then emitted so
+ * that within the first DIVERSITY_HEAD entries no kind holds more than
+ * DIVERSITY_SHARE of the slots. A kind that hits its cap is deferred and its
+ * remaining entries follow, still in score order, once the head is filled.
+ * When only capped kinds remain the cap is lifted rather than leaving a gap.
+ */
+export function rankPatterns(list: Pattern[]): Pattern[] {
+  const sorted = [...list].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  const cap = Math.floor(DIVERSITY_HEAD * DIVERSITY_SHARE);
+  const out: Pattern[] = [];
+  const used = new Map<string, number>();
+  const deferred: Pattern[] = [];
+  for (const p of sorted) {
+    if (out.length >= DIVERSITY_HEAD) {
+      deferred.push(p);
+      continue;
+    }
+    const n = used.get(p.kind) ?? 0;
+    if (n >= cap) {
+      deferred.push(p);
+      continue;
+    }
+    used.set(p.kind, n + 1);
+    out.push(p);
+  }
+  /* deferred entries are already in score order relative to each other */
+  return out.concat(deferred);
+}
+
 export function buildIntel(items: IntelItem[], opts: BuildIntelOptions): IntelSnapshot {
   const now = opts.now;
   const maxNodes = opts.maxNodes ?? 250;
@@ -270,6 +327,7 @@ export function buildIntel(items: IntelItem[], opts: BuildIntelOptions): IntelSn
   // ---------------------------------------------------------------- patterns
   const patterns: Pattern[] = [];
   const spikeScore = new Map<string, number>();
+  const recentCount = new Map<string, number>();
   const recentItemsOf = new Map<string, IntelItem[]>();
   const labelOf = (id: string) => ENTITY_BY_ID[id]?.label ?? id;
 
@@ -292,9 +350,10 @@ export function buildIntel(items: IntelItem[], opts: BuildIntelOptions): IntelSn
       else before48++;
     }
     recentItemsOf.set(id, recentItems);
+    recentCount.set(id, recent);
     const baseline = prior / 6;
     if (recent >= 3 && recent >= 2 * baseline) {
-      const score = Math.min(1, (recent - baseline) / Math.max(3, baseline * 2));
+      const score = spikeScoreOf(recent, baseline);
       spikeScore.set(id, score);
       const co = new Map<string, number>();
       for (const it of recentItems) for (const other of byItem.get(it.id) ?? []) if (other !== id) bump(co, other);
@@ -320,7 +379,7 @@ export function buildIntel(items: IntelItem[], opts: BuildIntelOptions): IntelSn
         kind: "emerging",
         title: `Emerging: ${labelOf(id)}`,
         detail: `${recent48} mentions in 48h, none in the five days before. ${truncate(its[0]?.title ?? "", 90)}`,
-        score: Math.min(1, recent48 / 6),
+        score: emergingScoreOf(recent48),
         entityIds: [id],
         itemIds: its.slice(0, 20).map((it) => it.id),
       });
@@ -340,34 +399,38 @@ export function buildIntel(items: IntelItem[], opts: BuildIntelOptions): IntelSn
       kind: "cluster",
       title: `${labelOf(p.a)} x ${labelOf(p.b)}`,
       detail: `${p.count} shared headlines: ${heads.join(" / ")}`,
-      score: Math.min(1, p.count / 8),
+      score: clusterScoreOf(p.count),
       entityIds: [p.a, p.b],
       itemIds: p.itemIds,
     });
   }
 
   // Co-movement: a country and a commodity spiking together in the same headlines.
-  for (const [a, sa] of spikeScore) {
+  // Both need at least CO_MIN_RECENT mentions in 24h and CO_MIN_SHARED shared headlines,
+  // so a single headline naming a country and a commodity is not a pattern.
+  for (const a of spikeScore.keys()) {
     const ea = ENTITY_BY_ID[a];
     if (!ea || (ea.kind !== "country" && ea.kind !== "org")) continue;
-    for (const [b, sb] of spikeScore) {
+    const recentA = recentCount.get(a) ?? 0;
+    if (recentA < CO_MIN_RECENT) continue;
+    for (const b of spikeScore.keys()) {
       const eb = ENTITY_BY_ID[b];
       if (!eb || eb.kind !== "commodity") continue;
+      const recentB = recentCount.get(b) ?? 0;
+      if (recentB < CO_MIN_RECENT) continue;
       const shared = (recentItemsOf.get(a) ?? []).filter((it) => byItem.get(it.id)?.includes(b));
-      if (!shared.length) continue;
+      if (shared.length < CO_MIN_SHARED) continue;
       patterns.push({
         id: `co-movement:${a}:${b}`,
         kind: "co-movement",
         title: `${labelOf(a)} and ${labelOf(b)} rising together`,
-        detail: `Both spiked in the last 24h, ${shared.length} shared headline${shared.length > 1 ? "s" : ""}: ${truncate(shared[0].title, 70)}`,
-        score: (sa + sb) / 2,
+        detail: `Both spiked in the last 24h, ${shared.length} shared headlines: ${truncate(shared[0].title, 70)}`,
+        score: coMovementScoreOf(shared.length, recentA, recentB),
         entityIds: [a, b],
         itemIds: shared.slice(0, 20).map((it) => it.id),
       });
     }
   }
-
-  patterns.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
   return {
     generatedAt: new Date(now).toISOString(),
@@ -376,7 +439,7 @@ export function buildIntel(items: IntelItem[], opts: BuildIntelOptions): IntelSn
     points: [...points.values()].sort((a, b) => b.count - a.count || a.iso2.localeCompare(b.iso2)),
     flows: flowList,
     graph: { nodes, links },
-    patterns: patterns.slice(0, 25),
+    patterns: rankPatterns(patterns).slice(0, MAX_PATTERNS),
   };
 }
 

@@ -520,6 +520,8 @@ export default function Dashboard() {
     : wide
       ? { gridTemplateColumns: `${sideCol} minmax(0, 1fr) ${rightCol}`, gridTemplateRows: "minmax(0, 1fr)" }
       : { gridTemplateColumns: `${sideCol} minmax(0, 1fr)`, gridTemplateRows: "minmax(0, 1fr) auto" };
+  /* the globe and graph fill the main column; on phones they get a fixed height inside the page scroll instead */
+  const viewFill = cn("relative flex min-h-0 min-w-0 flex-1 flex-col", narrow ? "min-h-[60dvh] overflow-visible" : "overflow-hidden");
   const mainLabel = prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : prefs.view === "countries" ? "Countries" : "Headlines";
 
   return (
@@ -567,9 +569,8 @@ export default function Dashboard() {
               className={narrow ? "block" : "col-start-2 row-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden"}
               aria-label={mainLabel}
             >
-              {/* the unconverted views keep their CSS Modules; the legacy scope carries the old variables and element defaults for them */}
               {prefs.view === "globe" ? (
-                <div className="view-fill">
+                <div className={viewFill}>
                   {snapshot ? (
                     <GlobeView points={snapshot.points} flows={snapshot.flows} items={itemMap} theme={prefs.theme} onSelectCountry={selectCountry} onOpenCard={openCard} selected={country} />
                   ) : (
@@ -577,7 +578,7 @@ export default function Dashboard() {
                   )}
                 </div>
               ) : prefs.view === "graph" ? (
-                <div className="view-fill">
+                <div className={viewFill}>
                   {viewSnapshot ? (
                     <GraphView nodes={graph.nodes} links={graph.links} items={itemMap} theme={prefs.theme} focus={graphFocus} onFocus={setGraphFocus} />
                   ) : (

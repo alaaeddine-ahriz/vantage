@@ -480,7 +480,7 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
   }, [selectedPoint, items]);
 
   return (
-    <div className="relative size-full min-h-[420px] overflow-hidden">
+    <div className="relative min-h-[420px] w-full flex-1 overflow-hidden">
       <div ref={hostRef} className="absolute inset-0" />
       {status === "loading" && <div className={PLACEHOLDER}>loading globe</div>}
       {status === "nowebgl" && <div className={PLACEHOLDER}>WebGL not available</div>}

@@ -571,7 +571,7 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
   const focusColor = focusNode ? kindColor(focusNode) : palette.muted;
 
   return (
-    <div ref={wrapRef} className="relative size-full min-h-[420px] overflow-hidden bg-background text-foreground">
+    <div ref={wrapRef} className="relative min-h-[420px] w-full flex-1 overflow-hidden bg-background text-foreground">
       <div className="absolute inset-0">
         {size.w > 0 && size.h > 0 && graphData.nodes.length > 0 && (
           <ForceGraph2D

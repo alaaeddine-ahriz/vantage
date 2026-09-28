@@ -44,6 +44,10 @@ A control center for world news, built for market research in energy and industr
 
 Preferences (watchlist, saved items, filters, view, theme, compare list, country card tab) live in `localStorage` under `ww:prefs:v1`.
 
+## Checking the data sources
+
+`npm run health` (or `GET /api/health` on the deployed app, also reachable from the "run health check" link in the right panel) probes every upstream (World Bank, IMF, Yahoo Finance, Stooq, Frankfurter, three RSS feeds) and reports the HTTP status with the first 160 characters of any error body. Country cards show the World Bank or IMF error text in their status line; when the IMF is unreachable the five IMF indicators fall back to World Bank history (no projections) and the card says so. The UI is built with Tailwind v4 and shadcn/ui components (kept in `src/components/ui`).
+
 ## Run locally
 
 ```bash

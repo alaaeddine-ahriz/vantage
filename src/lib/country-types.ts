@@ -67,7 +67,7 @@ export const INDICATORS: IndicatorDef[] = [
   { id: "manuf_va", code: "NV.IND.MANF.ZS", source: "wb", label: "Manufacturing value added", short: "Manufacturing", group: "industry", unit: "% GDP", fmt: "pct", better: "none" },
   { id: "manuf_growth", code: "NV.IND.MANF.KD.ZG", source: "wb", label: "Manufacturing value added growth", short: "Manuf. growth", group: "industry", unit: "%", fmt: "pct", better: "up" },
   { id: "manuf_exports", code: "TX.VAL.MANF.ZS.UN", source: "wb", label: "Manufactures exports", short: "Manuf. exports", group: "industry", unit: "% merch. exports", fmt: "pct", better: "none" },
-  { id: "hightech_exports", code: "TX.VAL.TECH.ZS", source: "wb", label: "High-technology exports", short: "High-tech", group: "industry", unit: "% manuf. exports", fmt: "pct", better: "up" },
+  { id: "hightech_exports", code: "TX.VAL.TECH.MF.ZS", source: "wb", label: "High-technology exports", short: "High-tech", group: "industry", unit: "% manuf. exports", fmt: "pct", better: "up" },
   { id: "metals_exports", code: "TX.VAL.MMTL.ZS.UN", source: "wb", label: "Ores and metals exports", short: "Metals exports", group: "industry", unit: "% merch. exports", fmt: "pct", better: "none" },
   { id: "mineral_rents", code: "NY.GDP.MINR.RT.ZS", source: "wb", label: "Mineral rents", short: "Mineral rents", group: "industry", unit: "% GDP", fmt: "pct", better: "none" },
   { id: "rd", code: "GB.XPD.RSDV.GD.ZS", source: "wb", label: "R&D expenditure", short: "R&D", group: "industry", unit: "% GDP", fmt: "pct", better: "up" },
@@ -136,6 +136,8 @@ export interface CountryData {
   sources: { wb: "ok" | "failed" | "skipped"; imf: "ok" | "failed" | "skipped" };
   /** Why a source failed, per source: "timeout after 12s", "HTTP 403", "fetch failed (ENOTFOUND)". */
   errors?: { wb?: string; imf?: string };
+  /** Indicator ids served from the World Bank fallback because the IMF was unavailable (no forecasts). */
+  fallback?: string[];
 }
 
 export interface ScreenerRow {

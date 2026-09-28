@@ -494,3 +494,22 @@ export function useNow(every: number): number {
   }, [every]);
   return now;
 }
+
+/* Tailwind only generates classes it can read verbatim from the source, so lane and quote group
+ * colours are looked up in static maps instead of being built from ids at render time. */
+export const LANE_CLASS: Record<LaneId, { bg: string; text: string; border: string }> = {
+  oilgas: { bg: "bg-lane-oilgas", text: "text-lane-oilgas", border: "border-lane-oilgas" },
+  power: { bg: "bg-lane-power", text: "text-lane-power", border: "border-lane-power" },
+  renewables: { bg: "bg-lane-renewables", text: "text-lane-renewables", border: "border-lane-renewables" },
+  industry: { bg: "bg-lane-industry", text: "text-lane-industry", border: "border-lane-industry" },
+  policy: { bg: "bg-lane-policy", text: "text-lane-policy", border: "border-lane-policy" },
+  markets: { bg: "bg-lane-markets", text: "text-lane-markets", border: "border-lane-markets" },
+};
+
+export const GROUP_CLASS: Record<QuoteGroup, { text: string; border: string }> = {
+  energy: { text: "text-lane-oilgas", border: "border-t-lane-oilgas" },
+  metals: { text: "text-lane-industry", border: "border-t-lane-industry" },
+  fx: { text: "text-lane-power", border: "border-t-lane-power" },
+  indices: { text: "text-lane-markets", border: "border-t-lane-markets" },
+  rates: { text: "text-lane-policy", border: "border-t-lane-policy" },
+};

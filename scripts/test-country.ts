@@ -62,6 +62,20 @@ function stubFetch(routes: Route[]): void {
 
 const raw = (name: string): string => readFileSync(path.join(FIXTURES, name), "utf8");
 
+/** Rows of a World Bank fixture restricted to one code, as the API answers a single-code request. */
+function wbSingle(fixtureName: string, code: string): string {
+  const json = JSON.parse(raw(fixtureName)) as [unknown, Array<{ indicator: { id: string } }>];
+  return JSON.stringify([json[0], json[1].filter((r) => r.indicator.id === code)]);
+}
+
+/** Code of a single-code World Bank indicator URL, or null for a batch. */
+function singleCode(url: string): string | null {
+  const part = url.split("/indicator/")[1]?.split("?")[0] ?? "";
+  return part && !part.includes(";") ? part : null;
+}
+
+const isBatch = (u: string) => u.includes("/indicator/") && (u.split("/indicator/")[1]?.split("?")[0] ?? "").includes(";");
+
 function frRoutes(overrides: Route[] = []): Route[] {
   return [
     ...overrides,
@@ -175,11 +189,15 @@ async function main(): Promise<void> {
     assert.deepEqual(d.missing, expectedMissing);
     for (const id of present) assert.ok(d.series[id], `${id} present`);
 
-    // Batching: source-2 chunks of at most 20 codes, one WGI call with source=3
+    // Batching: source-2 chunks of at most 10 codes, one WGI call with source=3, current year as the upper bound
     const frCalls = calls.filter((u) => u.includes("/v2/country/FR/indicator/"));
     for (const u of frCalls) {
       const codes = u.split("/indicator/")[1].split("?")[0].split(";");
-      assert.ok(codes.length <= 20, `chunk size ${codes.length}`);
+      assert.ok(codes.length <= 10, `chunk size ${codes.length}`);
+      assert.ok(codes.every((c) => /^[A-Z0-9.]+$/.test(c)), `codes are [A-Z0-9.] only: ${u}`);
+      assert.ok(u.includes(`&date=1995:${CURRENT_YEAR}`), `date range ends this year: ${u}`);
+      assert.ok(u.includes("per_page=10000"), "per_page 10000");
+      assert.ok(!u.includes("%3B"), "semicolons stay literal");
       if (u.includes("source=3")) assert.deepEqual(codes, ["PV.EST", "RL.EST", "RQ.EST", "GE.EST", "CC.EST"]);
       else assert.ok(codes.every((c) => !c.endsWith(".EST")), "no WGI codes in source 2 calls");
     }
@@ -187,23 +205,119 @@ async function main(): Promise<void> {
     assert.ok(calls.some((u) => u.includes("imf.org") && u.includes("NGDP_RPCH") && u.includes("GGXWDG_NGDP") && u.endsWith("/FRA")));
   });
 
-  await test("loadCountry: failing WB call marks wb failed, IMF still present", async () => {
-    stubFetch(frRoutes([{ match: (u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2"), fail: true }]));
+  await test("loadCountry: every WB indicator call failing marks wb failed with the reason, IMF still present", async () => {
+    stubFetch(frRoutes([{ match: (u) => u.includes("/v2/country/FR/indicator/"), fail: true }]));
     const d = await loadCountry("FR");
     assert.equal(d.sources.wb, "failed");
     assert.equal(d.sources.imf, "ok");
     assert.equal(d.errors?.wb, "network down");
     assert.equal(d.errors?.imf, undefined);
+    assert.equal(d.fallback, undefined);
     assert.ok(d.series.gdp_growth);
+    assert.ok(!d.series.gdp);
+    assert.ok(!d.series.pol_stability);
+    assert.ok(d.missing.includes("gdp"));
+    // Every batch was retried per code before giving up
+    const single = calls.filter((u) => u.includes("/v2/country/FR/indicator/") && singleCode(u));
+    assert.equal(single.length, INDICATORS.filter((x) => x.source === "wb").length, "one retry per WB code");
+  });
+
+  await test("loadCountry: only source 2 down keeps WGI and stays ok with the lost codes in missing", async () => {
+    stubFetch(frRoutes([{ match: (u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2"), fail: true }]));
+    const d = await loadCountry("FR");
+    assert.equal(d.sources.wb, "ok", "something came back from the World Bank");
+    assert.equal(d.errors?.wb, undefined, "no source-level error while data is present");
     assert.ok(d.series.pol_stability, "WGI call still parsed");
     assert.ok(!d.series.gdp);
     assert.ok(d.missing.includes("gdp"));
   });
 
-  await test("loadCountry: WB error body counts as failure; everything down still returns a profile", async () => {
-    stubFetch(frRoutes([{ match: (u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2"), body: raw("wb-error.json") }]));
+  await test("loadCountry: a batch failing on one invalid code is retried per code and loses only that code", async () => {
+    const bad = "EG.IMP.CONS.ZS";
+    stubFetch(
+      frRoutes([
+        // Every source-2 batch answers with the World Bank error shape (one bad code poisons the whole batch)
+        { match: (u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2") && isBatch(u), body: raw("wb-error.json") },
+        { match: (u) => u.includes("/v2/country/FR/indicator/") && singleCode(u) === bad, body: raw("wb-error.json") },
+        {
+          match: (u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2") && singleCode(u) !== null,
+          body: "",
+        },
+      ]),
+    );
+    // Single-code answers built from the fixture on the fly
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const code = url.includes("/v2/country/FR/indicator/") && url.includes("source=2") ? singleCode(url) : null;
+      if (code && code !== bad) {
+        calls.push(url);
+        return new Response(wbSingle("wb-indicators-fr.json", code), { status: 200 });
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+
+    const d = await loadCountry("fr");
+    assert.equal(d.sources.wb, "ok");
+    assert.equal(d.errors?.wb, undefined, "partial loss is not a source failure");
+    assert.equal(d.series.gdp?.latest?.value, 3030904000000, "gdp recovered by the per-code retry");
+    assert.ok(d.series.population && d.series.fdi, "other codes recovered");
+    assert.ok(d.series.pol_stability, "WGI batch untouched");
+    assert.ok(d.series.gdp_growth, "IMF untouched");
+    assert.ok(d.missing.includes("energy_imports"), "the invalid code is lost");
+    assert.ok(!d.missing.includes("gdp"));
+    const batches = calls.filter((u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2") && isBatch(u));
+    const singles = calls.filter((u) => u.includes("/v2/country/FR/indicator/") && u.includes("source=2") && singleCode(u));
+    assert.ok(batches.length >= 3, `batches first (${batches.length})`);
+    assert.equal(singles.length, INDICATORS.filter((x) => x.source === "wb" && (x.wbSource ?? 2) === 2).length, "one retry per source-2 code");
+    assert.ok(singles.some((u) => singleCode(u) === bad), "the bad code was retried too");
+  });
+
+  await test("loadCountry: IMF 403 falls back to the World Bank equivalents, no est points, errors.imf HTTP 403", async () => {
+    stubFetch(
+      frRoutes([
+        { match: (u) => u.includes("imf.org"), status: 403, body: "<html>Access Denied</html>" },
+        { match: (u) => u.includes("/v2/country/FR/indicator/NY.GDP.MKTP.KD.ZG;FP.CPI.TOTL.ZG"), body: raw("wb-imf-fallback-fr.json") },
+      ]),
+    );
+    const d = await loadCountry("fr");
+    assert.equal(d.sources.imf, "failed");
+    assert.equal(d.errors?.imf, "HTTP 403");
+    assert.equal(d.sources.wb, "ok");
+    assert.equal(d.errors?.wb, undefined);
+    assert.deepEqual(d.fallback, ["gdp_growth", "inflation", "unemployment", "current_account"], "gov_debt is all null in the fixture");
+    assert.ok(d.missing.includes("gov_debt"));
+    const g = d.series.gdp_growth;
+    assert.ok(g, "gdp_growth from the World Bank");
+    assert.deepEqual(g.points.map((p) => p.year), [2021, 2022, 2023]);
+    assert.ok(g.points.every((p) => !p.est), "no projections on the fallback");
+    assert.equal(g.latest?.value, 1.1);
+    assert.equal(g.world, undefined);
+    assert.equal(d.series.inflation.latest?.year, 2024);
+    assert.equal(d.series.unemployment.latest?.value, 7.4);
+    assert.ok(d.series.gdp, "regular WB series unaffected");
+    // The IMF call carried the browser headers
+    const fbCalls = calls.filter((u) => u.includes("NY.GDP.MKTP.KD.ZG"));
+    assert.equal(fbCalls.length, 1, "one extra World Bank request");
+    assert.ok(fbCalls[0].includes("source=2"));
+    assert.ok(fbCalls[0].includes("/v2/country/FR/"));
+  });
+
+  await test("loadCountry: IMF fails and the fallback fails too: imf failed, nothing served, no fallback list", async () => {
+    stubFetch(frRoutes([{ match: (u) => u.includes("imf.org"), fail: true }]));
+    const d = await loadCountry("fr");
+    assert.equal(d.sources.imf, "failed");
+    assert.equal(d.errors?.imf, "network down");
+    assert.equal(d.fallback, undefined);
+    assert.ok(d.missing.includes("gdp_growth"));
+    assert.ok(d.series.gdp);
+  });
+
+  await test("loadCountry: WB error body on every batch counts as failure; everything down still returns a profile", async () => {
+    stubFetch(frRoutes([{ match: (u) => u.includes("/v2/country/FR/indicator/"), body: raw("wb-error.json") }]));
     const d = await loadCountry("fr");
     assert.equal(d.sources.wb, "failed");
+    assert.equal(d.errors?.wb, "World Bank: Invalid value: The provided parameter value is not valid");
     assert.ok(d.series.gdp_growth);
 
     stubFetch([]);
@@ -288,6 +402,27 @@ async function main(): Promise<void> {
     const none = await loadScreener("nope");
     assert.deepEqual(none.rows, []);
     assert.equal(calls.length, 0, "no fetch for an unknown id");
+  });
+
+  await test("loadScreener: IMF 403 falls back to the World Bank equivalent for all countries", async () => {
+    stubFetch([
+      { match: (u) => u.includes("/v2/country?format=json"), body: raw("wb-countries.json") },
+      { match: (u) => u.includes("imf.org"), status: 403, body: "denied" },
+      { match: (u) => u.includes("/v2/country/all/indicator/NY.GDP.MKTP.KD.ZG") && u.includes("source=2"), body: raw("wb-all-gdp.json").replaceAll("NY.GDP.MKTP.CD", "NY.GDP.MKTP.KD.ZG") },
+    ]);
+    const s = await loadScreener("gdp_growth");
+    assert.equal(s.indicator, "gdp_growth");
+    assert.deepEqual(s.rows.map((r) => r.iso3), ["USA", "DEU", "FRA", "NGA"], "rows from the World Bank equivalent");
+    assert.ok(s.rows.every((r) => r.year < CURRENT_YEAR));
+    assert.ok(calls.some((u) => u.includes("imf.org")), "IMF tried first");
+
+    stubFetch([
+      { match: (u) => u.includes("/v2/country?format=json"), body: raw("wb-countries.json") },
+      { match: (u) => u.includes("imf.org"), fail: true },
+      { match: (u) => u.includes("/v2/country/all/indicator/NY.GDP.MKTP.KD.ZG"), fail: true },
+    ]);
+    const dead = await loadScreener("gdp_growth");
+    assert.deepEqual(dead.rows, [], "both down: empty rows, no throw");
   });
 
   await test("mockCountry: deterministic, plausible, est points on forecasts", () => {

@@ -33,8 +33,36 @@ const parser = new Parser<Record<string, unknown>, RawItem>({
   timeout: FETCH_TIMEOUT_MS,
 });
 
-const UA =
-  "Mozilla/5.0 (compatible; Vantage/1.0; +https://github.com/alaaeddine-ahriz/vantage)";
+/** A current desktop Chrome string with our tag appended: publishers behind bot filters reject bare "compatible" agents. */
+export const FEED_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Vantage/1.0";
+
+/** Headers sent to every publisher, shared with the health check. */
+export const FEED_HEADERS: Record<string, string> = {
+  "user-agent": FEED_UA,
+  accept:
+    "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml;q=0.9, text/xml;q=0.9, text/html;q=0.7, */*;q=0.5",
+  "accept-language": "en-US,en;q=0.9,fr;q=0.8",
+  "cache-control": "no-cache",
+  pragma: "no-cache",
+};
+
+/** Thrown on a non-2xx feed response; the message already reads "HTTP 403 (blocked)". */
+export class FeedHttpError extends Error {
+  constructor(public status: number) {
+    super(describeHttpStatus(status));
+    this.name = "FeedHttpError";
+  }
+}
+
+/** "HTTP 403 (blocked)", "HTTP 429 (rate limited)", "HTTP 503 (unavailable)", otherwise "HTTP <status>". */
+export function describeHttpStatus(status: number): string {
+  if (status === 401 || status === 403) return `HTTP ${status} (blocked)`;
+  if (status === 429) return "HTTP 429 (rate limited)";
+  if (status === 404 || status === 410) return `HTTP ${status} (gone)`;
+  if (status >= 500) return `HTTP ${status} (unavailable)`;
+  return `HTTP ${status}`;
+}
 
 export function stripHtml(html: string): string {
   const text = html
@@ -125,19 +153,14 @@ export async function fetchFeedText(url: string): Promise<string> {
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
-      headers: {
-        "user-agent": UA,
-        accept:
-          "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.5",
-        "accept-language": "en,fr;q=0.8",
-      },
+      headers: FEED_HEADERS,
       signal: ctrl.signal,
       redirect: "follow",
       // Next.js data cache on Vercel: identical feed fetches within 4 minutes
       // are served from cache, so every visitor does not re-hit every publisher.
       next: { revalidate: 240 },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new FeedHttpError(res.status);
     return decodeFeedBytes(await res.arrayBuffer(), res.headers.get("content-type"));
   } finally {
     clearTimeout(timer);
@@ -235,7 +258,9 @@ export async function loadSource(
   try {
     const xml = await fetchFeedText(source.url);
     if (!/<(rss|feed|rdf:RDF|channel)\b/i.test(xml.slice(0, 4000))) {
-      throw new Error("not a feed");
+      // Usually an HTML challenge or landing page served with a 200.
+      const html = /<(!doctype html|html)\b/i.test(xml.slice(0, 2000));
+      throw new Error(html ? "not a feed (HTML page, likely a bot challenge)" : "not a feed");
     }
     const items = await parseFeedXml(xml, source);
     return {
@@ -243,17 +268,22 @@ export async function loadSource(
       items,
     };
   } catch (err) {
-    const message =
-      err instanceof Error
-        ? err.name === "AbortError"
-          ? "timeout"
-          : err.message.slice(0, 80)
-        : "error";
+    const message = describeFeedError(err);
     return {
       status: { id: source.id, name: source.name, ok: false, count: 0, ms: Date.now() - t0, error: message },
       items: [],
     };
   }
+}
+
+/** "timeout after 9s", "HTTP 403 (blocked)", "fetch failed (ENOTFOUND)", or the parser's message, at most 80 characters. */
+export function describeFeedError(err: unknown): string {
+  if (!(err instanceof Error)) return "error";
+  if (err.name === "AbortError" || err.name === "TimeoutError") return `timeout after ${Math.round(FETCH_TIMEOUT_MS / 1000)}s`;
+  const cause = (err as Error & { cause?: unknown }).cause;
+  const code = cause && typeof cause === "object" && "code" in cause ? String((cause as { code: unknown }).code) : "";
+  const text = code && !err.message.includes(code) ? `${err.message} (${code})` : err.message;
+  return (text || err.name).slice(0, 80);
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {

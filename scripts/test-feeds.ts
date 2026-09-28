@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { classify } from "../src/lib/classify";
-import { decodeFeedBytes, dedupe, hashId, parseFeedXml, stripHtml } from "../src/lib/feeds";
+import { FEED_HEADERS, decodeFeedBytes, dedupe, describeHttpStatus, hashId, loadSource, parseFeedXml, stripHtml } from "../src/lib/feeds";
 import { SYMBOLS, loadQuotes } from "../src/lib/markets";
 import { SOURCE_BY_ID } from "../src/lib/sources";
 import { titleKey } from "../src/lib/text";
@@ -377,6 +377,63 @@ async function main() {
       assert.equal(quotes.find((q) => q.id === "gold")?.provider, "none", "never started");
       await sleep(700);
       assert.equal(quotes.find((q) => q.id === "henryhub")?.provider, "none", "late results do not mutate the returned snapshot");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  // ------------------------------------------------------------ Error surfacing
+  await test("loadSource: a publisher 403 is reported as HTTP 403 (blocked), HTML pages as not a feed", async () => {
+    const realFetch = globalThis.fetch;
+    let sentHeaders: Record<string, string> = {};
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      sentHeaders = (init?.headers as Record<string, string>) ?? {};
+      if (url.includes("bbci")) return new Response("<html>denied</html>", { status: 403 });
+      if (url.includes("oilprice")) return new Response("<!doctype html><html><body>Just a moment</body></html>", { status: 200, headers: { "content-type": "text/html" } });
+      return new Response("", { status: 503 });
+    }) as unknown as typeof fetch;
+    try {
+      const bbc = await loadSource(src("bbc-business"));
+      assert.equal(bbc.status.ok, false);
+      assert.equal(bbc.status.error, "HTTP 403 (blocked)");
+      assert.equal(sentHeaders, FEED_HEADERS);
+      assert.match(FEED_HEADERS["user-agent"], /^Mozilla\/5\.0 \(Windows NT 10\.0.*Chrome\/\d+.* Vantage\/1\.0$/);
+      const oil = await loadSource(src("oilprice"));
+      assert.equal(oil.status.error, "not a feed (HTML page, likely a bot challenge)");
+      const other = await loadSource(src("bbc-world") ? { ...src("bbc-world"), url: "https://example.org/x" } : src("bbc-world"));
+      assert.equal(other.status.error, "HTTP 503 (unavailable)");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.equal(describeHttpStatus(429), "HTTP 429 (rate limited)");
+    assert.equal(describeHttpStatus(404), "HTTP 404 (gone)");
+    assert.equal(describeHttpStatus(418), "HTTP 418");
+  });
+
+  await test("loadQuotes: every provider failing yields provider none with each HTTP status in the note", async () => {
+    const realFetch = globalThis.fetch;
+    const hosts: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      hosts.push(new URL(url).host);
+      const h = (init?.headers as Record<string, string>) ?? {};
+      assert.match(h["user-agent"] ?? "", /Chrome\//, "browser UA on every provider");
+      if (url.includes("yahoo")) return new Response("Too Many Requests", { status: 429 });
+      if (url.includes("stooq")) return new Response("", { status: 403 });
+      return new Response("{}", { status: 500 });
+    }) as unknown as typeof fetch;
+    try {
+      const quotes = await loadQuotes(5000);
+      const brent = quotes.find((q) => q.id === "brent")!;
+      assert.equal(brent.provider, "none");
+      assert.equal(brent.note, "yahoo HTTP 429; stooq HTTP 403");
+      const eurusd = quotes.find((q) => q.id === "eurusd")!;
+      assert.equal(eurusd.note, "yahoo HTTP 429; stooq HTTP 403; frankfurter HTTP 500");
+      const eua = quotes.find((q) => q.id === "eua")!;
+      assert.equal(eua.note, "proxy: SparkChange physical EUA ETC; yahoo HTTP 429", "instrument note kept in front");
+      assert.ok(hosts.includes("query2.finance.yahoo.com"), "second Yahoo host tried after a 429");
+      assert.ok(hosts.includes("stooq.com") && hosts.includes("api.frankfurter.app"), "fallbacks actually ran");
     } finally {
       globalThis.fetch = realFetch;
     }

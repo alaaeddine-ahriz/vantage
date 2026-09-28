@@ -6,6 +6,7 @@ import type { FeedsResponse, MarketsResponse, Quote, SourceStatus } from "@/lib/
 import type { Brief, BriefRequest, GraphLink, GraphNode, IntelSnapshot } from "@/lib/intel-types";
 import { buildIntel } from "@/lib/intel";
 import { FEED_BATCHES, SOURCES } from "@/lib/sources";
+import { cn } from "@/lib/utils";
 import TopBar from "./TopBar";
 import Ticker from "./Ticker";
 import Sidebar from "./Sidebar";
@@ -20,8 +21,9 @@ import {
 } from "./util";
 
 /* the globe (three.js) and the force graph (canvas) only run in the browser and load on first use */
-const GlobeView = dynamic(() => import("./GlobeView"), { ssr: false, loading: () => <div className="empty">loading globe</div> });
-const GraphView = dynamic(() => import("./GraphView"), { ssr: false, loading: () => <div className="empty">loading graph</div> });
+const Loading = ({ what }: { what: string }) => <div className="m-auto p-6 text-center text-xs text-muted-foreground">loading {what}</div>;
+const GlobeView = dynamic(() => import("./GlobeView"), { ssr: false, loading: () => <Loading what="globe" /> });
+const GraphView = dynamic(() => import("./GraphView"), { ssr: false, loading: () => <Loading what="graph" /> });
 
 const BRIEF_KEY = "ww:brief:v1";
 /** Newest items sent to the brief; the route accepts up to 400. */
@@ -130,6 +132,8 @@ export default function Dashboard() {
   const inflight = useRef(false);
   const lastStart = useRef(0);
   const { match: narrow, known: layoutKnown } = useMediaQuery("(max-width: 859px)");
+  const { match: wide } = useMediaQuery("(min-width: 1180px)");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const tick = useNow(30_000);
   const now = tick || Date.now();
 
@@ -144,7 +148,7 @@ export default function Dashboard() {
     if (ready) savePrefs(prefs);
   }, [prefs, ready]);
   useEffect(() => {
-    if (ready) document.documentElement.setAttribute("data-theme", prefs.theme);
+    if (ready) document.documentElement.classList.toggle("dark", prefs.theme === "dark");
   }, [prefs.theme, ready]);
 
   /* ---------- data */
@@ -402,6 +406,7 @@ export default function Dashboard() {
   }, []);
   const removeWatch = useCallback((term: string) => setPrefs((p) => ({ ...p, watchlist: p.watchlist.filter((w) => w !== term) })), []);
   const onRefresh = useCallback(() => void refresh(), [refresh]);
+  const openFilters = useCallback(() => setFiltersOpen(true), []);
   const selectCountry = useCallback((iso2: string | null) => setCountry((c) => (iso2 && c === iso2 ? null : iso2)), []);
   /* the country card: the globe sheet opens it, and its News button returns to the lanes with the country filter kept */
   const openCard = useCallback((iso2: string) => {
@@ -505,8 +510,20 @@ export default function Dashboard() {
     return () => window.removeEventListener("keydown", onKey);
   }, [refresh, toggleView, toggleWatchOnly, toggleTheme]);
 
+  /* ---------- layout: three columns from 1180px, the workspace under the board between 860 and 1179px, a single scrolling page below */
+  const lOff = !narrow && collapsed.has("sidebar");
+  const rOff = !narrow && collapsed.has("right");
+  const sideCol = lOff ? "26px" : "232px";
+  const rightCol = rOff ? "26px" : "288px";
+  const bodyStyle = narrow
+    ? undefined
+    : wide
+      ? { gridTemplateColumns: `${sideCol} minmax(0, 1fr) ${rightCol}`, gridTemplateRows: "minmax(0, 1fr)" }
+      : { gridTemplateColumns: `${sideCol} minmax(0, 1fr)`, gridTemplateRows: "minmax(0, 1fr) auto" };
+  const mainLabel = prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : prefs.view === "countries" ? "Countries" : "Headlines";
+
   return (
-    <div className="app">
+    <div className="flex min-h-dvh flex-col min-[860px]:h-dvh">
       <TopBar
         updatedAt={updatedAt}
         nextAt={nextAt}
@@ -528,61 +545,80 @@ export default function Dashboard() {
         onWatchOnly={toggleWatchOnly}
         onTheme={toggleTheme}
         onRefresh={onRefresh}
+        onFilters={openFilters}
       />
       <Ticker quotes={quotes} error={quotesError} open={!collapsed.has("ticker")} onToggle={toggleTicker} />
       {/* the composition below depends on the viewport, so it waits for the media query instead of repainting from desktop to phone */}
-      <div className={`body${!narrow && collapsed.has("sidebar") ? " l-off" : ""}${!narrow && collapsed.has("right") ? " r-off" : ""}`}>
+      <div className={narrow ? "block" : "grid min-h-0 flex-1"} style={bodyStyle}>
         {layoutKnown && (
           <>
-            <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} collapsed={collapsed} onToggle={togglePanel} />
-            <main className="main" aria-label={prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : prefs.view === "countries" ? "Countries" : "Headlines"}>
+            <Sidebar
+              prefs={prefs}
+              counts={counts}
+              statusById={statusById}
+              narrow={narrow}
+              update={update}
+              collapsed={collapsed}
+              onToggle={togglePanel}
+              sheetOpen={filtersOpen}
+              onSheetOpen={setFiltersOpen}
+            />
+            <main
+              className={narrow ? "block" : "col-start-2 row-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden"}
+              aria-label={mainLabel}
+            >
+              {/* the unconverted views keep their CSS Modules; the legacy scope carries the old variables and element defaults for them */}
               {prefs.view === "globe" ? (
-                <div className="view-fill">
+                <div className="legacy view-fill">
                   {snapshot ? (
                     <GlobeView points={snapshot.points} flows={snapshot.flows} items={itemMap} theme={prefs.theme} onSelectCountry={selectCountry} onOpenCard={openCard} selected={country} />
                   ) : (
-                    <div className="empty">loading</div>
+                    <Loading what="globe" />
                   )}
                 </div>
               ) : prefs.view === "graph" ? (
-                <div className="view-fill">
+                <div className="legacy view-fill">
                   {viewSnapshot ? (
                     <GraphView nodes={graph.nodes} links={graph.links} items={itemMap} theme={prefs.theme} focus={graphFocus} onFocus={setGraphFocus} />
                   ) : (
-                    <div className="empty">loading</div>
+                    <Loading what="graph" />
                   )}
                 </div>
               ) : prefs.view === "countries" ? (
-                <CountryView
-                  snapshot={snapshot}
-                  items={itemMap}
-                  selected={country}
-                  onSelect={setCountry}
-                  compare={prefs.compare}
-                  onCompare={setCompare}
-                  theme={prefs.theme}
-                  window={prefs.window}
-                  onSearch={setSearch}
-                  onShowNews={showCountryNews}
-                  tab={prefs.countryTab}
-                  onTab={setCountryTab}
-                />
+                <div className="legacy contents">
+                  <CountryView
+                    snapshot={snapshot}
+                    items={itemMap}
+                    selected={country}
+                    onSelect={setCountry}
+                    compare={prefs.compare}
+                    onCompare={setCompare}
+                    theme={prefs.theme}
+                    window={prefs.window}
+                    onSearch={setSearch}
+                    onShowNews={showCountryNews}
+                    tab={prefs.countryTab}
+                    onTab={setCountryTab}
+                  />
+                </div>
               ) : prefs.view === "intel" ? (
-                <IntelPanel
-                  snapshot={viewSnapshot}
-                  brief={brief}
-                  briefState={briefState}
-                  briefError={briefError}
-                  onGenerate={onGenerate}
-                  model={prefs.briefModel}
-                  onModel={(m) => setPrefs((p) => ({ ...p, briefModel: m }))}
-                  onSearch={setSearch}
-                  items={itemMap}
-                  watchlist={prefs.watchlist}
-                  onAddWatch={addWatch}
-                  window={prefs.window}
-                  now={now}
-                />
+                <div className="legacy contents">
+                  <IntelPanel
+                    snapshot={viewSnapshot}
+                    brief={brief}
+                    briefState={briefState}
+                    briefError={briefError}
+                    onGenerate={onGenerate}
+                    model={prefs.briefModel}
+                    onModel={(m) => setPrefs((p) => ({ ...p, briefModel: m }))}
+                    onSearch={setSearch}
+                    items={itemMap}
+                    watchlist={prefs.watchlist}
+                    onAddWatch={addWatch}
+                    window={prefs.window}
+                    now={now}
+                  />
+                </div>
               ) : (
                 <LaneBoard
                   items={visible}
@@ -600,21 +636,24 @@ export default function Dashboard() {
                 />
               )}
             </main>
-            <RightPanel
-              watchlist={prefs.watchlist}
-              watchCounts={watchCounts}
-              saved={prefs.saved}
-              health={health}
-              now={now}
-              narrow={narrow}
-              collapsed={collapsed}
-              onToggle={togglePanel}
-              onAddWatch={addWatch}
-              onRemoveWatch={removeWatch}
-              onSearchTerm={setSearch}
-              onUnsave={unsave}
-              onClearSaved={clearSaved}
-            />
+            <div className={cn(narrow ? "block" : "flex min-h-0 flex-col", !narrow && (wide ? "col-start-3 row-start-1" : "col-start-2 row-start-2 max-h-[38dvh]"), !narrow && !wide && rOff && "max-h-none")}>
+              <RightPanel
+                watchlist={prefs.watchlist}
+                watchCounts={watchCounts}
+                saved={prefs.saved}
+                health={health}
+                now={now}
+                narrow={narrow}
+                wide={wide}
+                collapsed={collapsed}
+                onToggle={togglePanel}
+                onAddWatch={addWatch}
+                onRemoveWatch={removeWatch}
+                onSearchTerm={setSearch}
+                onUnsave={unsave}
+                onClearSaved={clearSaved}
+              />
+            </div>
           </>
         )}
       </div>

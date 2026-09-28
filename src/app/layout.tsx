@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,17 +15,19 @@ export const viewport: Viewport = {
   themeColor: "#0a0d12",
 };
 
-/* Applies the stored theme before hydration so light-theme users never see a dark flash. */
+/* Dark is the default and is rendered on the server; the stored theme is applied before hydration so light-theme users never see a dark flash. */
 const themeInit =
-  'try{var p=JSON.parse(localStorage.getItem("ww:prefs:v1")||"{}");if(p&&p.theme==="light"){document.documentElement.setAttribute("data-theme","light")}}catch(e){}';
+  'try{var p=JSON.parse(localStorage.getItem("ww:prefs:v1")||"{}");if(p&&p.theme==="light"){document.documentElement.classList.remove("dark")}}catch(e){}';
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
-      <body>{children}</body>
+      <body className="bg-background text-foreground antialiased">
+        <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+      </body>
     </html>
   );
 }

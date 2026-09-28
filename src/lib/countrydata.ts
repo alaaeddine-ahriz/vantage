@@ -26,16 +26,49 @@ const IMF = "https://www.imf.org/external/datamapper/api/v1";
  * 30 s budget: every call runs in parallel and one retry still fits.
  */
 const TIMEOUT_MS = 12_000;
+/** Shorter budget for the second wave (per-code retries, IMF fallback) so the route stays under 30 s. */
+const RETRY_WAVE_TIMEOUT_MS = 8_000;
 /** Retries on a network error, a timeout, 429 or a 5xx; 4xx answers are final. */
 const RETRIES = 1;
 const RETRY_DELAY_MS = 600;
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const WB_CHUNK = 20;
+export const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+/** Sent to every data API; datacenter egress without browser-looking headers is what bot filters reject first. */
+export const BROWSER_HEADERS: Record<string, string> = {
+  "user-agent": UA,
+  accept: "application/json, text/plain, */*",
+  "accept-language": "en-US,en;q=0.9",
+};
+/** The IMF datamapper sits behind bot protection; a Referer and Origin from its own site get the request through. */
+export const IMF_HEADERS: Record<string, string> = {
+  ...BROWSER_HEADERS,
+  referer: "https://www.imf.org/external/datamapper/",
+  origin: "https://www.imf.org",
+};
+/**
+ * Codes per World Bank request. A multi-indicator call fails as a whole when one code is invalid for
+ * the source, so batches stay small and a failed batch is retried one code at a time.
+ */
+const WB_CHUNK = 10;
+const WB_PER_PAGE = 10_000;
+const WB_RETRY_CONCURRENCY = 6;
 const COUNTRY_START = 1995;
 const WORLD_START = 2015;
-/** Upper bound of the World Bank date range; one year ahead so a freshly published year is never cut off. */
-const END_YEAR = new Date().getUTCFullYear() + 1;
+/** Upper bound of the World Bank date range: the current UTC year. */
+const END_YEAR = new Date().getUTCFullYear();
+/** World Bank indicator codes are dotted upper-case tokens; anything else never reaches the URL. */
+const WB_CODE_RE = /^[A-Z0-9.]+$/;
+/**
+ * World Bank equivalents of the IMF WEO series, used when the datamapper is unreachable.
+ * Annual actuals only: no projections, so series served this way carry no est points.
+ */
+export const IMF_WB_FALLBACK: Record<string, string> = {
+  gdp_growth: "NY.GDP.MKTP.KD.ZG",
+  inflation: "FP.CPI.TOTL.ZG",
+  unemployment: "SL.UEM.TOTL.ZS",
+  current_account: "BN.CAB.XOKA.GD.ZS",
+  gov_debt: "GC.DOD.TOTL.GD.ZS",
+};
 export const REVALIDATE_COUNTRY = 86_400;
 export const REVALIDATE_COUNTRY_LIST = 86_400;
 export const REVALIDATE_SCREENER = 21_600;
@@ -59,11 +92,21 @@ const AGGREGATES = new Set(
 
 // ------------------------------------------------------------------ fetch
 
-class HttpError extends Error {
-  constructor(public status: number) {
+export class HttpError extends Error {
+  /** First characters of a non-2xx body, for logs and the health check; never part of the user-facing message. */
+  constructor(
+    public status: number,
+    public excerpt = "",
+  ) {
     super(`HTTP ${status}`);
     this.name = "HttpError";
   }
+}
+
+export interface FetchOptions {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  retries?: number;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -75,10 +118,10 @@ function retryable(err: unknown): boolean {
 }
 
 /** Short, user-facing reason for a failed call: "timeout after 12s", "HTTP 403", "fetch failed (ENOTFOUND)". */
-export function describeError(err: unknown): string {
+export function describeError(err: unknown, timeoutMs = TIMEOUT_MS): string {
   if (err instanceof HttpError) return err.message;
   if (err instanceof Error) {
-    if (err.name === "AbortError" || err.name === "TimeoutError") return `timeout after ${Math.round(TIMEOUT_MS / 1000)}s`;
+    if (err.name === "AbortError" || err.name === "TimeoutError") return `timeout after ${Math.round(timeoutMs / 1000)}s`;
     const cause = (err as Error & { cause?: unknown }).cause;
     const code = cause && typeof cause === "object" && "code" in cause ? String((cause as { code: unknown }).code) : "";
     return code ? `${err.message} (${code})` : err.message || err.name;
@@ -86,32 +129,56 @@ export function describeError(err: unknown): string {
   return "request failed";
 }
 
-async function fetchOnce(url: string, revalidateSec: number): Promise<unknown> {
+async function fetchOnce(url: string, revalidateSec: number, opts: FetchOptions): Promise<unknown> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? TIMEOUT_MS);
   try {
     const res = await fetch(url, {
-      headers: { "user-agent": UA, accept: "application/json,text/plain,*/*", "accept-language": "en-US,en;q=0.8" },
+      headers: opts.headers ?? BROWSER_HEADERS,
       signal: ctrl.signal,
       redirect: "follow",
       next: { revalidate: revalidateSec },
     });
-    if (!res.ok) throw new HttpError(res.status);
+    if (!res.ok) {
+      let excerpt = "";
+      try {
+        excerpt = (await res.text()).slice(0, 160);
+      } catch {
+        // body unreadable; the status is enough
+      }
+      console.warn(`[countrydata] ${res.status} from ${url}${excerpt ? `: ${excerpt.replace(/\s+/g, " ")}` : ""}`);
+      throw new HttpError(res.status, excerpt);
+    }
     return (await res.json()) as unknown;
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function fetchJson(url: string, revalidateSec: number): Promise<unknown> {
+export async function fetchJson(url: string, revalidateSec: number, opts: FetchOptions = {}): Promise<unknown> {
+  const retries = opts.retries ?? RETRIES;
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetchOnce(url, revalidateSec);
+      return await fetchOnce(url, revalidateSec, opts);
     } catch (err) {
-      if (attempt >= RETRIES || !retryable(err)) throw err;
+      if (attempt >= retries || !retryable(err)) throw err;
       await sleep(RETRY_DELAY_MS);
     }
   }
+}
+
+/** Runs fn over items with at most `limit` in flight, keeping order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 // ------------------------------------------------------------------ parsers
@@ -304,28 +371,87 @@ function latestValue(points: SeriesPoint[] | undefined): number | undefined {
   return best?.value;
 }
 
-function wbSource2(): IndicatorDef[] {
-  return INDICATORS.filter((d) => d.source === "wb" && (d.wbSource ?? 2) === 2);
-}
-function wbWgi(): IndicatorDef[] {
-  return INDICATORS.filter((d) => d.source === "wb" && d.wbSource === 3);
-}
 function imfDefs(): IndicatorDef[] {
   return INDICATORS.filter((d) => d.source === "imf");
 }
 
-function wbIndicatorUrl(country: string, codes: string[], source: number, from: number): string {
-  return `${WB}/country/${country}/indicator/${codes.join(";")}?source=${source}&format=json&per_page=20000&date=${from}:${END_YEAR}`;
+/** Codes are joined with a literal ";" (the World Bank does not accept it percent-encoded); nothing else needs encoding. */
+export function wbIndicatorUrl(country: string, codes: string[], source: number, from: number): string {
+  return `${WB}/country/${country}/indicator/${codes.join(";")}?source=${source}&format=json&per_page=${WB_PER_PAGE}&date=${from}:${END_YEAR}`;
 }
 
-function wbBatches(country: string, from: number): { url: string; codes: string[] }[] {
-  const out: { url: string; codes: string[] }[] = [];
-  for (const codes of chunk(wbSource2().map((d) => d.code), WB_CHUNK)) {
-    out.push({ url: wbIndicatorUrl(country, codes, 2, from), codes });
+/** Drops codes that could not be part of a valid World Bank URL and warns once per offender. */
+function safeCodes(codes: string[]): string[] {
+  return codes.filter((c) => {
+    if (WB_CODE_RE.test(c)) return true;
+    console.warn(`[countrydata] World Bank code "${c}" skipped: only [A-Z0-9.] allowed`);
+    return false;
+  });
+}
+
+export interface WbGroup {
+  source: number;
+  codes: string[];
+}
+
+/** Batches of at most WB_CHUNK codes per source; WGI (source 3) never shares a request with WDI (source 2). */
+export function wbGroups(defs: IndicatorDef[]): WbGroup[] {
+  const out: WbGroup[] = [];
+  const bySource = new Map<number, string[]>();
+  for (const d of defs) {
+    if (d.source !== "wb") continue;
+    const s = d.wbSource ?? 2;
+    const list = bySource.get(s) ?? [];
+    list.push(d.code);
+    bySource.set(s, list);
   }
-  const wgi = wbWgi().map((d) => d.code);
-  if (wgi.length) out.push({ url: wbIndicatorUrl(country, wgi, 3, from), codes: wgi });
+  for (const [source, codes] of bySource) {
+    for (const part of chunk(safeCodes(codes), WB_CHUNK)) out.push({ source, codes: part });
+  }
   return out;
+}
+
+export interface WbLoad {
+  /** Code to points, for every code that returned at least one non-null value. */
+  points: Map<string, SeriesPoint[]>;
+  /** Codes whose own request failed, with the reason ("World Bank: Invalid value: ...", "HTTP 502"). */
+  lost: Map<string, string>;
+  /** Reason of the first batch failure, if any. */
+  error?: string;
+}
+
+/**
+ * Loads one batch. When the batch call fails (network, non-2xx, the World Bank error shape, an
+ * unexpected body) each code is fetched on its own with bounded concurrency, so a single invalid
+ * code costs only itself rather than the whole batch.
+ */
+async function loadWbGroup(country: string, group: WbGroup, from: number, revalidate: number, into: WbLoad): Promise<void> {
+  const merge = (json: unknown) => {
+    for (const [code, pts] of parseWbIndicators(json)) into.points.set(code, pts);
+  };
+  try {
+    merge(await fetchJson(wbIndicatorUrl(country, group.codes, group.source, from), revalidate));
+    return;
+  } catch (err) {
+    into.error ??= describeError(err);
+    console.warn(`[countrydata] World Bank batch (${country}, source ${group.source}, ${group.codes.length} codes) failed: ${describeError(err)}; retrying per code`);
+  }
+  await mapLimit(group.codes, WB_RETRY_CONCURRENCY, async (code) => {
+    try {
+      merge(await fetchJson(wbIndicatorUrl(country, [code], group.source, from), revalidate, { timeoutMs: RETRY_WAVE_TIMEOUT_MS, retries: 0 }));
+    } catch (err) {
+      const reason = describeError(err, RETRY_WAVE_TIMEOUT_MS);
+      into.lost.set(code, reason);
+      console.warn(`[countrydata] World Bank code ${code} (${country}, source ${group.source}) lost: ${reason}`);
+    }
+  });
+}
+
+/** Loads every group in parallel; never throws. */
+export async function loadWbSeries(country: string, groups: WbGroup[], from: number, revalidate: number): Promise<WbLoad> {
+  const into: WbLoad = { points: new Map(), lost: new Map() };
+  await Promise.all(groups.map((g) => loadWbGroup(country, g, from, revalidate, into)));
+  return into;
 }
 
 function gazetteerCountry(iso2: string) {
@@ -363,18 +489,21 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
   const iso3 = iso2 === "EU" ? "EU" : (ISO2_TO_ISO3[iso2] ?? iso2);
   const currentYear = new Date().getUTCFullYear();
 
-  const batches = wbBatches(wbCountry, COUNTRY_START);
-  const worldBatches = wbBatches("WLD", WORLD_START);
+  const groups = wbGroups(INDICATORS);
   const imfUrl = `${IMF}/${imfDefs().map((d) => d.code).join("/")}/${iso3}`;
 
-  const [metaRes, imfRes, ...rest] = await Promise.allSettled([
-    fetchJson(`${WB}/country/${wbCountry}?format=json`, REVALIDATE_COUNTRY),
-    fetchJson(imfUrl, REVALIDATE_COUNTRY),
-    ...batches.map((b) => fetchJson(b.url, REVALIDATE_COUNTRY)),
-    ...worldBatches.map((b) => fetchJson(b.url, REVALIDATE_COUNTRY)),
+  const [metaRes, imfRes, wbLoad, worldLoad] = await Promise.all([
+    fetchJson(`${WB}/country/${wbCountry}?format=json`, REVALIDATE_COUNTRY).then(
+      (value) => ({ status: "fulfilled", value }) as const,
+      (reason: unknown) => ({ status: "rejected", reason }) as const,
+    ),
+    fetchJson(imfUrl, REVALIDATE_COUNTRY, { headers: IMF_HEADERS }).then(
+      (value) => ({ status: "fulfilled", value }) as const,
+      (reason: unknown) => ({ status: "rejected", reason }) as const,
+    ),
+    loadWbSeries(wbCountry, groups, COUNTRY_START, REVALIDATE_COUNTRY),
+    loadWbSeries("WLD", groups, WORLD_START, REVALIDATE_COUNTRY),
   ]);
-  const batchRes = rest.slice(0, batches.length);
-  const worldRes = rest.slice(batches.length);
 
   // Profile
   let profile: CountryProfile | null = null;
@@ -400,36 +529,17 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
     }
   }
 
-  // World Bank country series; the first failure's reason is reported so the card can say why
-  const wbPoints = new Map<string, SeriesPoint[]>();
-  let wbFailed = false;
-  let wbError: string | undefined;
-  batchRes.forEach((r) => {
-    if (r.status !== "fulfilled") {
-      wbFailed = true;
-      wbError ??= describeError(r.reason);
-      return;
-    }
-    try {
-      for (const [code, pts] of parseWbIndicators(r.value)) wbPoints.set(code, pts);
-    } catch (err) {
-      wbFailed = true;
-      wbError ??= describeError(err);
-    }
-  });
+  // World Bank country series. A batch failure is retried per code inside loadWbSeries, so a bad
+  // code only loses itself; the source counts as failed only when nothing at all came back.
+  const wbPoints = wbLoad.points;
+  const wbFailed = wbPoints.size === 0 && (wbLoad.error !== undefined || wbLoad.lost.size > 0);
+  const wbError = wbFailed ? (wbLoad.error ?? [...wbLoad.lost.values()][0]) : undefined;
 
-  // World aggregate, latest year per code
+  // World aggregate, latest year per code (decoration: failures are ignored)
   const world = new Map<string, number>();
-  for (const r of worldRes) {
-    if (r.status !== "fulfilled") continue;
-    try {
-      for (const [code, pts] of parseWbIndicators(r.value)) {
-        const v = latestValue(pts);
-        if (v !== undefined) world.set(code, v);
-      }
-    } catch {
-      // ignore: world values are decoration
-    }
+  for (const [code, pts] of worldLoad.points) {
+    const v = latestValue(pts);
+    if (v !== undefined) world.set(code, v);
   }
 
   // IMF
@@ -444,10 +554,26 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
     }
   }
 
+  // IMF fallback: the same five series from the World Bank (annual actuals, no projections)
+  const fallback: string[] = [];
+  const fallbackPoints = new Map<string, SeriesPoint[]>();
+  if (imfFailed) {
+    const fbDefs = imfDefs().filter((d) => IMF_WB_FALLBACK[d.id]);
+    const fbGroups = wbGroups(fbDefs.map((d) => ({ ...d, source: "wb" as const, code: IMF_WB_FALLBACK[d.id], wbSource: 2 })));
+    const fb = await loadWbSeries(wbCountry, fbGroups, COUNTRY_START, REVALIDATE_COUNTRY);
+    for (const d of fbDefs) {
+      const pts = fb.points.get(IMF_WB_FALLBACK[d.id]);
+      if (pts && pts.length) {
+        fallbackPoints.set(d.id, pts);
+        fallback.push(d.id);
+      }
+    }
+  }
+
   const series: Record<string, IndicatorSeries> = {};
   const missing: string[] = [];
   for (const def of INDICATORS) {
-    const points = def.source === "imf" ? imfPointsByCode.get(def.code) : wbPoints.get(def.code);
+    const points = def.source === "imf" ? (imfPointsByCode.get(def.code) ?? fallbackPoints.get(def.id)) : wbPoints.get(def.code);
     if (!points || points.length === 0) {
       missing.push(def.id);
       continue;
@@ -462,6 +588,7 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
     missing,
     sources: { wb: wbFailed ? "failed" : "ok", imf: imfFailed ? "failed" : "ok" },
     ...(wbError || imfError ? { errors: { ...(wbError ? { wb: wbError } : {}), ...(imfError ? { imf: imfError } : {}) } } : {}),
+    ...(fallback.length ? { fallback } : {}),
   };
 }
 
@@ -499,25 +626,42 @@ export async function loadScreener(indicatorId: string): Promise<ScreenerData> {
 
   const listP = loadCountryList();
   const byIso3 = new Map<string, { iso2: string; points: SeriesPoint[] }>();
+
+  const fromWb = async (code: string, source: number) => {
+    if (!WB_CODE_RE.test(code)) throw new Error(`World Bank: code "${code}" contains characters outside [A-Z0-9.]`);
+    const url = wbIndicatorUrl("all", [code], source, WORLD_START);
+    for (const r of parseWbRows(await fetchJson(url, REVALIDATE_SCREENER))) {
+      if (!r.iso3) continue;
+      let e = byIso3.get(r.iso3);
+      if (!e) {
+        e = { iso2: r.iso2.toUpperCase(), points: [] };
+        byIso3.set(r.iso3, e);
+      }
+      e.points.push({ year: r.year, value: r.value });
+    }
+  };
+
   try {
     if (def.source === "wb") {
-      const url = wbIndicatorUrl("all", [def.code], def.wbSource ?? 2, WORLD_START);
-      for (const r of parseWbRows(await fetchJson(url, REVALIDATE_SCREENER))) {
-        if (!r.iso3) continue;
-        let e = byIso3.get(r.iso3);
-        if (!e) {
-          e = { iso2: r.iso2.toUpperCase(), points: [] };
-          byIso3.set(r.iso3, e);
-        }
-        e.points.push({ year: r.year, value: r.value });
-      }
+      await fromWb(def.code, def.wbSource ?? 2);
     } else {
-      const json = await fetchJson(`${IMF}/${def.code}`, REVALIDATE_SCREENER);
-      for (const [iso3, points] of parseImfAll(json, def.code, currentYear)) {
-        byIso3.set(iso3, { iso2: ISO3_TO_ISO2[iso3] ?? "", points });
+      try {
+        const json = await fetchJson(`${IMF}/${def.code}`, REVALIDATE_SCREENER, { headers: IMF_HEADERS });
+        for (const [iso3, points] of parseImfAll(json, def.code, currentYear)) {
+          byIso3.set(iso3, { iso2: ISO3_TO_ISO2[iso3] ?? "", points });
+        }
+        if (!byIso3.size) throw new Error("unexpected response shape");
+      } catch (err) {
+        // IMF unreachable (or an empty answer): the World Bank equivalent, annual actuals only.
+        const code = IMF_WB_FALLBACK[def.id];
+        console.warn(`[countrydata] IMF screener ${def.code} failed: ${describeError(err)}${code ? `; falling back to World Bank ${code}` : ""}`);
+        if (!code) throw err;
+        byIso3.clear();
+        await fromWb(code, 2);
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[countrydata] screener ${indicatorId} failed: ${describeError(err)}`);
     return { generatedAt, indicator: indicatorId, rows: [] };
   }
   const list = await listP;

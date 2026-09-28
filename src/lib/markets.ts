@@ -80,8 +80,42 @@ const TIMEOUT_MS = 4000;
 const CONCURRENCY = 8;
 /** Overall budget for one loadQuotes call, well under the route's maxDuration. */
 const BUDGET_MS = 22_000;
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+export const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+/** Browser-looking headers: Yahoo answers datacenter egress with 401/429 far less often when they are present. */
+export const MARKET_HEADERS: Record<string, string> = {
+  "user-agent": UA,
+  "accept-language": "en-US,en;q=0.9",
+  "cache-control": "no-cache",
+  pragma: "no-cache",
+};
+export const YAHOO_HEADERS: Record<string, string> = {
+  ...MARKET_HEADERS,
+  accept: "application/json, text/plain, */*",
+  referer: "https://finance.yahoo.com/",
+  origin: "https://finance.yahoo.com",
+};
+
+/** Thrown on a non-2xx provider answer; the message is "HTTP <status>". */
+export class ProviderHttpError extends Error {
+  constructor(
+    public status: number,
+    public excerpt = "",
+  ) {
+    super(`HTTP ${status}`);
+    this.name = "ProviderHttpError";
+  }
+}
+
+/** Short reason for a failed provider call: "HTTP 429", "timeout after 4s", "fetch failed (ENOTFOUND)". */
+export function describeProviderError(err: unknown): string {
+  if (err instanceof ProviderHttpError) return err.message;
+  if (!(err instanceof Error)) return "failed";
+  if (err.name === "AbortError" || err.name === "TimeoutError") return `timeout after ${Math.round(TIMEOUT_MS / 1000)}s`;
+  const cause = (err as Error & { cause?: unknown }).cause;
+  const code = cause && typeof cause === "object" && "code" in cause ? String((cause as { code: unknown }).code) : "";
+  return (code ? `${err.message} (${code})` : err.message || err.name).slice(0, 60);
+}
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -112,18 +146,26 @@ function withNote(def: MarketSymbol, providerNote?: string): string | undefined 
   return parts.length ? parts.join("; ") : undefined;
 }
 
-/** GET with a hard timeout that also covers reading the body. */
-async function fetchText(url: string, accept: string): Promise<string> {
+/** GET with a hard timeout that also covers reading the body. Throws ProviderHttpError on a non-2xx answer. */
+async function fetchText(url: string, headers: Record<string, string>): Promise<string> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, {
-      headers: { "user-agent": UA, accept, "accept-language": "en-US,en;q=0.8" },
+      headers,
       signal: ctrl.signal,
       redirect: "follow",
       next: { revalidate: 120 },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let excerpt = "";
+      try {
+        excerpt = (await res.text()).slice(0, 160).replace(/\s+/g, " ");
+      } catch {
+        // status is enough
+      }
+      throw new ProviderHttpError(res.status, excerpt);
+    }
     return await res.text();
   } finally {
     clearTimeout(timer);
@@ -148,11 +190,31 @@ interface YahooChart {
   };
 }
 
+const YAHOO_HOSTS = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
+
+/** Tries query1 then query2 (they sit behind different edges and rate-limit separately). */
+async function fetchYahooChart(symbol: string): Promise<string> {
+  let lastErr: unknown;
+  for (const host of YAHOO_HOSTS) {
+    const url = `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`;
+    try {
+      return await fetchText(url, YAHOO_HEADERS);
+    } catch (err) {
+      lastErr = err;
+      // A 404 is about the symbol, not the edge: no point asking the other host.
+      if (err instanceof ProviderHttpError && err.status === 404) break;
+    }
+  }
+  throw lastErr;
+}
+
 async function fromYahoo(def: MarketSymbol): Promise<Quote | null> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(def.symbol)}?range=5d&interval=1d`;
-  const json = JSON.parse(await fetchText(url, "application/json,text/plain,*/*")) as YahooChart;
+  const json = JSON.parse(await fetchYahooChart(def.symbol)) as YahooChart;
   const result = json.chart?.result?.[0];
-  if (!result) return null;
+  if (!result) {
+    const e = json.chart?.error;
+    throw new Error(e?.code || e?.description ? `${e.code ?? "error"}: ${e.description ?? ""}`.trim() : "empty chart");
+  }
   const meta = result.meta ?? {};
   const closes = (result.indicators?.quote?.[0]?.close ?? [])
     .map(num)
@@ -195,7 +257,7 @@ async function fromYahoo(def: MarketSymbol): Promise<Quote | null> {
 
 async function fromStooq(def: MarketSymbol, ticker: string): Promise<Quote | null> {
   const url = `https://stooq.com/q/l/?s=${encodeURIComponent(ticker)}&f=sd2t2ohlcv&h&e=csv`;
-  const text = await fetchText(url, "text/csv,text/plain,*/*");
+  const text = await fetchText(url, { ...MARKET_HEADERS, accept: "text/csv, text/plain, */*", referer: "https://stooq.com/" });
   // Symbol,Date,Time,Open,High,Low,Close,Volume
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return null;
@@ -224,7 +286,7 @@ async function fromStooq(def: MarketSymbol, ticker: string): Promise<Quote | nul
 
 async function fromFrankfurter(def: MarketSymbol, pair: { from: string; to: string }): Promise<Quote | null> {
   const url = `https://api.frankfurter.app/latest?from=${pair.from}&to=${pair.to}`;
-  const json = JSON.parse(await fetchText(url, "application/json")) as {
+  const json = JSON.parse(await fetchText(url, { ...MARKET_HEADERS, accept: "application/json" })) as {
     date?: string;
     rates?: Record<string, number>;
   };
@@ -247,20 +309,28 @@ async function fromFrankfurter(def: MarketSymbol, pair: { from: string; to: stri
 
 // ------------------------------------------------------------------ Orchestration
 
+/**
+ * Yahoo first, then Stooq and Frankfurter where a mapping exists. Any failure (non-2xx, timeout,
+ * empty chart) falls through to the next provider; when all fail the quote comes back with
+ * provider "none" and a note naming each provider's reason, e.g. "yahoo HTTP 429; stooq HTTP 403".
+ */
 async function loadOne(def: MarketSymbol): Promise<Quote> {
+  const reasons: string[] = [];
   try {
     const q = await fromYahoo(def);
     if (q) return q;
-  } catch {
-    // fall through to the fallbacks
+    reasons.push("yahoo no price");
+  } catch (err) {
+    reasons.push(`yahoo ${describeProviderError(err)}`);
   }
   const ticker = STOOQ[def.id];
   if (ticker) {
     try {
       const q = await fromStooq(def, ticker);
       if (q) return q;
-    } catch {
-      // fall through
+      reasons.push("stooq no price");
+    } catch (err) {
+      reasons.push(`stooq ${describeProviderError(err)}`);
     }
   }
   const pair = FRANKFURTER[def.id];
@@ -268,11 +338,13 @@ async function loadOne(def: MarketSymbol): Promise<Quote> {
     try {
       const q = await fromFrankfurter(def, pair);
       if (q) return q;
-    } catch {
-      // fall through
+      reasons.push("frankfurter no rate");
+    } catch (err) {
+      reasons.push(`frankfurter ${describeProviderError(err)}`);
     }
   }
-  return emptyQuote(def);
+  console.warn(`[markets] ${def.id} (${def.symbol}) unavailable: ${reasons.join("; ")}`);
+  return { ...emptyQuote(def), note: withNote(def, reasons.join("; ")) };
 }
 
 /** Runs fn over items with at most `limit` in flight; stops picking new items once open() is false. */

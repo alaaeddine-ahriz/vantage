@@ -26,7 +26,8 @@ export interface TopBarProps {
 
 function TopBarBase(p: TopBarProps) {
   const now = useNow(1000);
-  const next = p.loading ? "refreshing" : p.nextAt && now ? `next in ${countdown(p.nextAt - now)}` : "next in -:--";
+  const next = p.nextAt && now ? `next in ${countdown(p.nextAt - now)}` : "next in -:--";
+  const status = p.updatedAt ? `updated ${utcClock(p.updatedAt, false)}` : p.loading || !p.batchErrors ? "loading" : "no data";
   return (
     <header className="topbar">
       <div className="brand">
@@ -38,7 +39,14 @@ function TopBarBase(p: TopBarProps) {
         {now ? utcClock(now) : "--:--:--"} <span className="muted">UTC</span>
       </div>
       <div className="upd mono muted" aria-live="off">
-        {p.updatedAt ? `updated ${utcClock(p.updatedAt, false)}` : "loading"} · {next}
+        {status}
+        {/* the countdown is desktop-only: on a phone it costs a whole top-bar row */}
+        <span className="hide-sm"> · {p.loading ? "refreshing" : next}</span>
+        {p.batchErrors > 0 && (
+          <span className="down" title="Feed batches that could not be fetched this round; their previous headlines are kept">
+            {" "}· {p.batchErrors} batch{p.batchErrors > 1 ? "es" : ""} failed
+          </span>
+        )}
       </div>
       <div className="chips hide-sm">
         <span className="chip" title="items shown / items loaded">
@@ -47,7 +55,6 @@ function TopBarBase(p: TopBarProps) {
         <span className="chip" title="source health">
           <span className="hdot ok" aria-hidden="true" /> {p.ok} ok
           <span className="hdot bad" aria-hidden="true" /> {p.failed} failed
-          {p.batchErrors > 0 && <span className="down">· {p.batchErrors} batch{p.batchErrors > 1 ? "es" : ""} failed</span>}
         </span>
       </div>
       <input
@@ -66,8 +73,8 @@ function TopBarBase(p: TopBarProps) {
           <button type="button" className={p.view === "lanes" ? "on" : ""} aria-pressed={p.view === "lanes"} onClick={() => p.onView("lanes")} title="Lanes view (v)">Lanes</button>
           <button type="button" className={p.view === "stream" ? "on" : ""} aria-pressed={p.view === "stream"} onClick={() => p.onView("stream")} title="Stream view (v)">Stream</button>
         </div>
-        <button type="button" className="chip" aria-pressed={p.watchOnly} onClick={p.onWatchOnly} title="Show watchlist hits only (w)">
-          <span aria-hidden="true">{"★"}</span> watch
+        <button type="button" className="chip" aria-pressed={p.watchOnly} aria-label="Watchlist hits only (w)" onClick={p.onWatchOnly} title="Filter to watchlist hits only (w)">
+          <span aria-hidden="true">{"★"}</span><span className="hide-sm"> hits only</span>
         </button>
         <button type="button" className="icon" onClick={p.onTheme} aria-label={`Switch to ${p.theme === "dark" ? "light" : "dark"} theme (t)`} title="Theme (t)">
           {p.theme === "dark" ? "☾" : "☀"}

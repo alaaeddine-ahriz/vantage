@@ -19,34 +19,34 @@ export const SYMBOLS: MarketSymbol[] = [
   // Energy
   { id: "brent", symbol: "BZ=F", label: "Brent", group: "energy", unit: "USD/bbl" },
   { id: "wti", symbol: "CL=F", label: "WTI", group: "energy", unit: "USD/bbl" },
-  { id: "henryhub", symbol: "NG=F", label: "Henry Hub gas", group: "energy", unit: "USD/MMBtu" },
-  { id: "ttf", symbol: "TTF=F", label: "Dutch TTF gas", group: "energy", unit: "EUR/MWh" },
-  { id: "coal", symbol: "MTF=F", label: "Coal API2 (Rotterdam)", group: "energy", unit: "USD/t" },
-  { id: "eua", symbol: "CO2.L", label: "EU carbon (EUA)", group: "energy", unit: "EUR/t", note: "proxy: SparkChange physical EUA ETC" },
-  { id: "rbob", symbol: "RB=F", label: "Gasoline RBOB", group: "energy", unit: "USD/gal" },
+  { id: "henryhub", symbol: "NG=F", label: "Henry Hub", group: "energy", unit: "USD/MMBtu" },
+  { id: "ttf", symbol: "TTF=F", label: "TTF gas", group: "energy", unit: "EUR/MWh" },
+  { id: "coal", symbol: "MTF=F", label: "Coal API2", group: "energy", unit: "USD/t" },
+  { id: "eua", symbol: "CO2.L", label: "EU carbon", group: "energy", unit: "EUR/t", note: "proxy: SparkChange physical EUA ETC" },
+  { id: "rbob", symbol: "RB=F", label: "Gasoline", group: "energy", unit: "USD/gal" },
   { id: "heatingoil", symbol: "HO=F", label: "Heating oil", group: "energy", unit: "USD/gal" },
   // Metals
   { id: "copper", symbol: "HG=F", label: "Copper", group: "metals", unit: "USD/lb" },
   { id: "aluminium", symbol: "ALI=F", label: "Aluminium", group: "metals", unit: "USD/t" },
-  { id: "hrc", symbol: "HRC=F", label: "US HRC steel", group: "metals", unit: "USD/st" },
+  { id: "hrc", symbol: "HRC=F", label: "HRC steel", group: "metals", unit: "USD/st" },
   { id: "gold", symbol: "GC=F", label: "Gold", group: "metals", unit: "USD/oz" },
-  { id: "uranium", symbol: "URA", label: "Uranium (URA)", group: "metals", unit: "USD", note: "proxy: Global X Uranium ETF" },
+  { id: "uranium", symbol: "URA", label: "Uranium ETF", group: "metals", unit: "USD", note: "proxy: Global X Uranium ETF" },
   // FX
   { id: "eurusd", symbol: "EURUSD=X", label: "EUR/USD", group: "fx" },
   { id: "gbpusd", symbol: "GBPUSD=X", label: "GBP/USD", group: "fx" },
   { id: "usdcny", symbol: "CNY=X", label: "USD/CNY", group: "fx" },
   { id: "usdjpy", symbol: "JPY=X", label: "USD/JPY", group: "fx" },
-  { id: "dxy", symbol: "DX-Y.NYB", label: "Dollar index", group: "fx" },
+  { id: "dxy", symbol: "DX-Y.NYB", label: "Dollar idx", group: "fx" },
   // Equity indices
   { id: "spx", symbol: "^GSPC", label: "S&P 500", group: "indices" },
-  { id: "sx5e", symbol: "^STOXX50E", label: "Euro Stoxx 50", group: "indices" },
+  { id: "sx5e", symbol: "^STOXX50E", label: "Euro Stoxx", group: "indices" },
   { id: "cac", symbol: "^FCHI", label: "CAC 40", group: "indices" },
   { id: "dax", symbol: "^GDAXI", label: "DAX", group: "indices" },
   { id: "ftse", symbol: "^FTSE", label: "FTSE 100", group: "indices" },
   { id: "nikkei", symbol: "^N225", label: "Nikkei 225", group: "indices" },
   { id: "hsi", symbol: "^HSI", label: "Hang Seng", group: "indices" },
   // Rates and volatility
-  { id: "us10y", symbol: "^TNX", label: "US 10Y yield", group: "rates", unit: "%" },
+  { id: "us10y", symbol: "^TNX", label: "US 10Y", group: "rates", unit: "%" },
   { id: "vix", symbol: "^VIX", label: "VIX", group: "rates" },
 ];
 
@@ -76,8 +76,10 @@ const FRANKFURTER: Record<string, { from: string; to: string }> = {
   gbpusd: { from: "GBP", to: "USD" },
 };
 
-const TIMEOUT_MS = 6000;
+const TIMEOUT_MS = 4000;
 const CONCURRENCY = 8;
+/** Overall budget for one loadQuotes call, well under the route's maxDuration. */
+const BUDGET_MS = 22_000;
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -273,24 +275,44 @@ async function loadOne(def: MarketSymbol): Promise<Quote> {
   return emptyQuote(def);
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+/** Runs fn over items with at most `limit` in flight; stops picking new items once open() is false. */
+async function mapLimit<T>(
+  items: T[],
+  limit: number,
+  open: () => boolean,
+  fn: (t: T, i: number) => Promise<void>,
+): Promise<void> {
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
+    while (next < items.length && open()) {
       const i = next++;
-      results[i] = await fn(items[i]);
+      await fn(items[i], i);
     }
   });
   await Promise.all(workers);
-  return results;
 }
 
-/** Loads every symbol in SYMBOLS order. Never throws: failures come back as provider "none". */
-export async function loadQuotes(): Promise<Quote[]> {
-  try {
-    return await mapLimit(SYMBOLS, CONCURRENCY, (def) => loadOne(def).catch(() => emptyQuote(def)));
-  } catch {
-    return SYMBOLS.map(emptyQuote);
-  }
+/**
+ * Loads every symbol in SYMBOLS order within an overall budget. Never throws:
+ * failures come back as provider "none", and so do symbols still pending when
+ * the budget runs out, so the route answers with JSON instead of being killed
+ * at maxDuration when every provider stalls to its timeout.
+ */
+export async function loadQuotes(budgetMs = BUDGET_MS): Promise<Quote[]> {
+  const quotes = SYMBOLS.map(emptyQuote);
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve();
+    }, budgetMs);
+  });
+  const work = mapLimit(SYMBOLS, CONCURRENCY, () => !expired, async (def, i) => {
+    quotes[i] = await loadOne(def).catch(() => emptyQuote(def));
+  }).catch(() => undefined);
+  await Promise.race([work, deadline]);
+  clearTimeout(timer);
+  // Snapshot: stragglers that finish later write into `quotes`, not into the response.
+  return quotes.slice();
 }

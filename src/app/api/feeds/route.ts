@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadSources } from "@/lib/feeds";
 import { mockFeeds } from "@/lib/mock";
-import { FEED_BATCHES, sourcesForBatch } from "@/lib/sources";
+import { FEED_BATCHES, SOURCES, sourcesForBatch } from "@/lib/sources";
 import type { FeedsResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -10,6 +10,8 @@ export const maxDuration = 60;
 
 const CACHE_CONTROL = "public, s-maxage=120, stale-while-revalidate=600";
 const MAX_BATCHES = 16;
+/** A batch never runs more than ~24 feeds: 12 workers x 9s timeout stays under maxDuration. */
+const MIN_BATCHES = Math.ceil(SOURCES.length / 24);
 /** Keeps a single batch response well under Vercel's body limits. */
 const MAX_ITEMS = 900;
 
@@ -30,7 +32,7 @@ export async function GET(req: Request): Promise<Response> {
   if (ofRaw === null || batchRaw === null) {
     return json({ error: "batch and of must be integers" }, 400, "no-store");
   }
-  const of = Math.min(Math.max(ofRaw, 1), MAX_BATCHES);
+  const of = Math.min(Math.max(ofRaw, MIN_BATCHES), MAX_BATCHES);
   const batch = Math.min(Math.max(batchRaw, 0), of - 1);
   const generatedAt = new Date().toISOString();
 

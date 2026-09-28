@@ -43,7 +43,8 @@ function NewsRowBase({ item, matcher, hit, saved, isNew, now, showLane, onStar }
             {wire && <span className="muted"> via wire</span>}
           </span>
           <span className="rreg" title={REGION_LABEL[item.region]}>{REGION_CODE[item.region]}</span>
-          {item.lang !== "en" && <span className="tag">{item.lang}</span>}
+          {/* the language tag is dropped when it would only restate the region ("FR [FR]") */}
+          {item.lang !== "en" && item.lang.toUpperCase() !== REGION_CODE[item.region] && <span className="tag">{item.lang}</span>}
         </button>
         <a className="rtitle" href={item.link} target="_blank" rel="noopener noreferrer">{title}</a>
         {open && (

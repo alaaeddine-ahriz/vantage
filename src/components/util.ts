@@ -11,6 +11,8 @@ export interface Item extends NewsItem {
   txt: string;
   /** folded source, publisher and sourceId, used by search. */
   meta: string;
+  /** normalised title key, used to drop the same headline arriving through two feeds. */
+  key: string;
 }
 
 /** Per-dimension item counts for the current window and search. */
@@ -80,6 +82,9 @@ export const REFRESH_MS = 5 * 60_000;
 /** Rows rendered per list before a "show more" button. */
 export const PAGE = 150;
 export const SAVED_MAX = 500;
+export const WATCHLIST_MAX = 200;
+/** Requests that hang longer than this are abandoned so the refresh cycle keeps running. */
+export const FETCH_TIMEOUT_MS = 45_000;
 
 export const LANE_BY_ID = Object.fromEntries(LANES.map((l) => [l.id, l])) as Record<LaneId, (typeof LANES)[number]>;
 export const REGION_LABEL = Object.fromEntries(REGIONS.map((r) => [r.id, r.label])) as Record<Region, string>;
@@ -94,14 +99,34 @@ export const QUOTE_GROUPS: { id: QuoteGroup; label: string }[] = [
 
 export const WIRE_SOURCES = new Set(SOURCES.filter((s) => s.kind === "gnews").map((s) => s.id));
 
+/** Google News wires re-carry publisher headlines; they lose against the direct feed when deduplicating. */
+export const isWire = (sourceId: string) => WIRE_SOURCES.has(sourceId) || sourceId.startsWith("gn-");
+
+/**
+ * Normalised title key: NFD, diacritics stripped, lowercased, non alphanumerics squashed to one space,
+ * trimmed and capped at 90 characters. Mirrors the server-side key so both agree when both exist.
+ */
+export function localTitleKey(title: string): string {
+  return title
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .slice(0, 90);
+}
+
 /** Enriches a NewsItem once, at merge time. */
 export function toItem(n: NewsItem): Item {
   const ts = Date.parse(n.publishedAt);
+  /* the server may ship a precomputed key; the cast keeps this compiling whether or not the field exists yet */
+  const serverKey = (n as NewsItem & { key?: string }).key;
   return {
     ...n,
     ts: Number.isFinite(ts) ? ts : 0,
     txt: fold(`${n.title} ${n.summary ?? ""}`),
     meta: fold(`${n.source} ${n.publisher ?? ""} ${n.sourceId}`),
+    key: typeof serverKey === "string" && serverKey ? serverKey : localTitleKey(n.title),
   };
 }
 
@@ -113,22 +138,35 @@ export const fmtInt = (n: number) => n.toLocaleString("en-US");
 
 /** Case and diacritic insensitive form of a string. */
 export function fold(s: string): string {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
+/* Only regex syntax characters are escaped: under the u flag an identity escape of anything else is a SyntaxError. */
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export interface Matcher { re: RegExp; reG: RegExp }
 
-/** Terms of 3 characters or fewer match on word boundaries, longer ones as substrings. */
+/* Unicode-aware boundaries: a term must start where no letter, digit or underscore precedes it. */
+const WORD_START = "(?<![\\p{L}\\p{N}_])";
+const WORD_END = "(?![\\p{L}\\p{N}_])";
+
+/**
+ * Every term matches at a word start, so "OPEC" no longer lights up inside "Sinopec" while "tariff" still
+ * matches "tariffs" and "LNG" matches "LNG-fuelled". Terms of 3 characters or fewer also need a trailing
+ * boundary so "TTF" does not match "ttfx". Input is escaped so "S&P", "C++" or "(" never throw.
+ */
 export function buildMatcher(terms: string[]): Matcher | null {
   const parts = terms
     .map((t) => fold(t.trim()))
     .filter(Boolean)
-    .map((t) => (t.length <= 3 ? `\\b${escapeRe(t)}\\b` : escapeRe(t)));
+    .map((t) => `${WORD_START}${escapeRe(t)}${t.length <= 3 ? WORD_END : ""}`);
   if (!parts.length) return null;
   const src = `(?:${parts.join("|")})`;
-  return { re: new RegExp(src, "i"), reG: new RegExp(src, "gi") };
+  try {
+    return { re: new RegExp(src, "iu"), reG: new RegExp(src, "giu") };
+  } catch {
+    return null;
+  }
 }
 
 export function matchesWatch(m: Matcher | null, foldedText: string): boolean {
@@ -238,29 +276,82 @@ function isStrArr(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
+const LANE_IDS = LANES.map((l) => l.id);
+const REGION_IDS = REGIONS.map((r) => r.id);
+const LANG_IDS = LANGS.map((l) => l.id);
+
+function pickId<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
+}
+
 function pickIds<T extends string>(v: unknown, allowed: readonly T[], fallback: T[]): T[] {
   if (!isStrArr(v)) return fallback;
   return v.filter((x): x is T => (allowed as readonly string[]).includes(x));
+}
+
+const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
+
+/** Every field of a stored item is normalised so exports and rows never meet a missing string. */
+function sanitizeSaved(v: unknown): NewsItem[] {
+  if (!Array.isArray(v)) return [];
+  const out: NewsItem[] = [];
+  const ids = new Set<string>();
+  for (const s of v as unknown[]) {
+    if (!s || typeof s !== "object") continue;
+    const o = s as Record<string, unknown>;
+    if (typeof o.id !== "string" || typeof o.title !== "string" || typeof o.link !== "string") continue;
+    if (!o.id || ids.has(o.id)) continue;
+    ids.add(o.id);
+    const lane = pickId(o.lane, LANE_IDS, "markets");
+    const lanes = pickIds(o.lanes, LANE_IDS, [lane]);
+    out.push({
+      id: o.id,
+      title: o.title,
+      link: o.link,
+      summary: str(o.summary),
+      publishedAt: str(o.publishedAt),
+      sourceId: str(o.sourceId),
+      source: str(o.source, "unknown source"),
+      publisher: typeof o.publisher === "string" && o.publisher ? o.publisher : undefined,
+      region: pickId(o.region, REGION_IDS, "global"),
+      lang: pickId(o.lang, LANG_IDS, "en"),
+      lanes: lanes.length ? lanes : [lane],
+      lane,
+    });
+    if (out.length >= SAVED_MAX) break;
+  }
+  return out;
+}
+
+/** Trims, drops blanks and folds away duplicates ("Opec" and "OPEC" are one term). */
+function sanitizeWatchlist(v: unknown, fallback: string[]): string[] {
+  if (!isStrArr(v)) return fallback;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    const t = raw.trim();
+    const f = fold(t);
+    if (!f || seen.has(f)) continue;
+    seen.add(f);
+    out.push(t);
+    if (out.length >= WATCHLIST_MAX) break;
+  }
+  return out;
 }
 
 export function sanitizePrefs(raw: unknown): Prefs {
   const d = DEFAULT_PREFS;
   if (!raw || typeof raw !== "object") return d;
   const r = raw as Record<string, unknown>;
-  const saved = Array.isArray(r.saved)
-    ? (r.saved as unknown[])
-        .filter((s): s is NewsItem => !!s && typeof s === "object" && typeof (s as NewsItem).id === "string" && typeof (s as NewsItem).title === "string" && typeof (s as NewsItem).link === "string")
-        .slice(0, SAVED_MAX)
-    : d.saved;
   return {
-    watchlist: isStrArr(r.watchlist) ? r.watchlist.slice(0, 200) : d.watchlist,
-    saved,
+    watchlist: sanitizeWatchlist(r.watchlist, d.watchlist),
+    saved: sanitizeSaved(r.saved),
     view: r.view === "stream" ? "stream" : "lanes",
     window: WINDOWS.some((w) => w.id === r.window) ? (r.window as WindowId) : d.window,
-    lanes: pickIds(r.lanes, LANES.map((l) => l.id), d.lanes),
-    regions: pickIds(r.regions, REGIONS.map((x) => x.id), d.regions),
-    langs: pickIds(r.langs, LANGS.map((x) => x.id), d.langs),
-    disabledSources: isStrArr(r.disabledSources) ? r.disabledSources : d.disabledSources,
+    lanes: pickIds(r.lanes, LANE_IDS, d.lanes),
+    regions: pickIds(r.regions, REGION_IDS, d.regions),
+    langs: pickIds(r.langs, LANG_IDS, d.langs),
+    disabledSources: isStrArr(r.disabledSources) ? Array.from(new Set(r.disabledSources)) : d.disabledSources,
     watchOnly: r.watchOnly === true,
     theme: r.theme === "light" ? "light" : "dark",
   };
@@ -298,7 +389,12 @@ function download(name: string, text: string, type: string) {
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
 
 export function exportCsv(items: NewsItem[]) {
-  const esc = (s: string | undefined) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+  /* a leading = + - @ tab or CR would be run as a formula by Excel and Sheets; a quote prefix neutralises it */
+  const esc = (s: string | undefined) => {
+    let v = String(s ?? "");
+    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;
+    return `"${v.replace(/"/g, '""')}"`;
+  };
   const head = ["publishedAt", "title", "source", "publisher", "region", "lang", "lane", "link", "summary"];
   const rows = items.map((i) => [i.publishedAt, i.title, i.source, i.publisher, i.region, i.lang, i.lane, i.link, i.summary].map(esc).join(","));
   download(`world-watchout-saved-${stamp()}.csv`, [head.join(","), ...rows].join("\r\n"), "text/csv;charset=utf-8");
@@ -308,21 +404,29 @@ export function exportMd(items: NewsItem[]) {
   const lines = [`# World Watchout: saved items`, ``, `Exported ${new Date().toISOString()} (${items.length} items)`, ``];
   for (const i of items) {
     const who = i.publisher ? `${i.publisher} via ${i.source}` : i.source;
-    lines.push(`- [${i.title.replace(/[[\]]/g, " ")}](${i.link}) (${who}, ${i.publishedAt.slice(0, 16).replace("T", " ")} UTC, ${i.lane})`);
+    const when = (i.publishedAt || "").slice(0, 16).replace("T", " ");
+    lines.push(`- [${i.title.replace(/[[\]]/g, " ")}](${i.link}) (${who}, ${when || "unknown time"} UTC, ${i.lane})`);
   }
   download(`world-watchout-saved-${stamp()}.md`, lines.join("\n") + "\n", "text/markdown;charset=utf-8");
 }
 
-export function useMediaQuery(query: string): boolean {
-  const [match, setMatch] = useState(false);
+export interface MediaQueryState {
+  match: boolean;
+  /** false until the query has been evaluated in the browser (always false during SSR and hydration). */
+  known: boolean;
+}
+
+/** Hydration-safe media query: `match` is false and `known` is false until the first effect runs. */
+export function useMediaQuery(query: string): MediaQueryState {
+  const [state, setState] = useState<MediaQueryState>({ match: false, known: false });
   useEffect(() => {
     const mq = window.matchMedia(query);
-    const on = () => setMatch(mq.matches);
+    const on = () => setState({ match: mq.matches, known: true });
     on();
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
   }, [query]);
-  return match;
+  return state;
 }
 
 /** Epoch ms that ticks every `every` ms after mount (0 during SSR). */

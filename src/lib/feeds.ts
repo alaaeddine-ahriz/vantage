@@ -1,5 +1,7 @@
+import { decodeHTML } from "entities";
 import Parser from "rss-parser";
 import { classify } from "./classify";
+import { titleKey } from "./text";
 import type { NewsItem, Source, SourceStatus } from "./types";
 
 const FETCH_TIMEOUT_MS = 9000;
@@ -35,19 +37,13 @@ const UA =
   "Mozilla/5.0 (compatible; WorldWatchout/1.0; +https://github.com/alaaeddine-ahriz/world-watchout)";
 
 export function stripHtml(html: string): string {
-  return html
+  const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/<[^>]+>/g, " ");
+  // decodeHTML handles named, decimal and hex references and never throws on
+  // out-of-range code points; \s also swallows the U+00A0 that &nbsp; becomes.
+  return decodeHTML(text).replace(/\s+/g, " ").trim();
 }
 
 export function cleanLink(link: string): string {
@@ -72,14 +68,24 @@ export function hashId(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-export function titleKey(title: string): string {
-  return title
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .slice(0, 90);
+/** RFC 822 zone names V8 does not parse (it only knows GMT/UT/UTC and the US zones). */
+const ZONES: Record<string, string> = {
+  CET: "+0100",
+  CEST: "+0200",
+  BST: "+0100",
+  WET: "+0000",
+  WEST: "+0100",
+  EET: "+0200",
+  EEST: "+0300",
+  MSK: "+0300",
+  IST: "+0530",
+};
+
+/** Date.parse with the European zone names normalised; NaN when missing or unreadable. */
+export function parseDate(raw: string | undefined): number {
+  if (!raw) return NaN;
+  const norm = raw.trim().replace(/\b(CET|CEST|BST|WET|WEST|EET|EEST|MSK|IST)$/, (m) => ZONES[m]);
+  return Date.parse(norm);
 }
 
 function detectCharset(contentType: string | null, head: string): string {
@@ -87,6 +93,31 @@ function detectCharset(contentType: string | null, head: string): string {
   if (ct) return ct.toLowerCase();
   const xml = /encoding=["']([\w-]+)["']/i.exec(head)?.[1];
   return (xml ?? "utf-8").toLowerCase();
+}
+
+const SINGLE_BYTE = /^(iso-8859-1|iso8859-1|latin1|windows-1252|cp1252|us-ascii|ascii)$/;
+
+/**
+ * Decodes a feed body. A UTF-8 BOM wins outright; a single-byte label is
+ * often a lie on a UTF-8 body, so strict UTF-8 is tried before trusting it.
+ */
+export function decodeFeedBytes(buf: ArrayBuffer, contentType: string | null): string {
+  const b = new Uint8Array(buf);
+  if (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return new TextDecoder("utf-8").decode(buf);
+  const head = new TextDecoder("latin1").decode(buf.slice(0, 200));
+  const charset = detectCharset(contentType, head);
+  if (SINGLE_BYTE.test(charset)) {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+    } catch {
+      // genuinely single-byte, use the label
+    }
+  }
+  try {
+    return new TextDecoder(charset).decode(buf);
+  } catch {
+    return new TextDecoder("utf-8").decode(buf);
+  }
 }
 
 export async function fetchFeedText(url: string): Promise<string> {
@@ -107,14 +138,7 @@ export async function fetchFeedText(url: string): Promise<string> {
       next: { revalidate: 240 },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = await res.arrayBuffer();
-    const head = new TextDecoder("latin1").decode(buf.slice(0, 200));
-    const charset = detectCharset(res.headers.get("content-type"), head);
-    try {
-      return new TextDecoder(charset).decode(buf);
-    } catch {
-      return new TextDecoder("utf-8").decode(buf);
-    }
+    return decodeFeedBytes(await res.arrayBuffer(), res.headers.get("content-type"));
   } finally {
     clearTimeout(timer);
   }
@@ -135,6 +159,7 @@ export function normalizeItems(
   rawItems: RawItem[],
   source: Source,
   now = Date.now(),
+  feedTs = NaN,
 ): NewsItem[] {
   const out: NewsItem[] = [];
   for (const raw of rawItems.slice(0, MAX_ITEMS_PER_FEED)) {
@@ -153,10 +178,11 @@ export function normalizeItems(
       }
     }
 
-    const dateStr = raw.isoDate ?? raw.pubDate ?? raw.published ?? raw.updated;
-    let ts = dateStr ? Date.parse(dateStr) : NaN;
-    if (Number.isNaN(ts)) ts = now;
-    if (ts > now + 6 * 3600 * 1000) ts = now;
+    let ts = parseDate(raw.isoDate ?? raw.pubDate ?? raw.published ?? raw.updated);
+    // Undated items take the feed's own build date, or else sit at the back of
+    // the 7-day window, instead of being re-stamped "now" on every poll.
+    if (Number.isNaN(ts)) ts = Number.isNaN(feedTs) ? now - MAX_AGE_MS + 1 : feedTs;
+    if (ts > now) ts = now;
     if (now - ts > MAX_AGE_MS) continue;
 
     const rawSummary =
@@ -183,6 +209,7 @@ export function normalizeItems(
       sourceId: source.id,
       source: source.name,
       publisher,
+      key: titleKey(title),
       region: source.region,
       lang: source.lang,
       lanes,
@@ -192,9 +219,13 @@ export function normalizeItems(
   return out;
 }
 
+const asString = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
 export async function parseFeedXml(xml: string, source: Source): Promise<NewsItem[]> {
   const feed = await parser.parseString(xml);
-  return normalizeItems((feed.items ?? []) as RawItem[], source);
+  // rss-parser maps RSS <lastBuildDate>/<pubDate> and Atom <updated> onto these.
+  const feedTs = parseDate(asString(feed.lastBuildDate) ?? asString(feed.pubDate));
+  return normalizeItems((feed.items ?? []) as RawItem[], source, Date.now(), feedTs);
 }
 
 export async function loadSource(
@@ -249,7 +280,7 @@ export function dedupe(items: NewsItem[]): NewsItem[] {
     return ag - bg || b.publishedAt.localeCompare(a.publishedAt);
   });
   for (const it of ordered) {
-    const tk = titleKey(it.title);
+    const tk = it.key ?? titleKey(it.title);
     if (byLink.has(it.link) || (tk.length > 20 && byTitle.has(tk))) continue;
     byLink.add(it.link);
     byTitle.add(tk);

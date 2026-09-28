@@ -7,8 +7,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { classify } from "../src/lib/classify";
-import { dedupe, hashId, parseFeedXml, titleKey } from "../src/lib/feeds";
+import { decodeFeedBytes, dedupe, hashId, parseFeedXml, stripHtml } from "../src/lib/feeds";
+import { SYMBOLS, loadQuotes } from "../src/lib/markets";
 import { SOURCE_BY_ID } from "../src/lib/sources";
+import { titleKey } from "../src/lib/text";
 import type { LaneId, NewsItem, Source } from "../src/lib/types";
 
 const FIXTURES = path.join(__dirname, "fixtures");
@@ -65,6 +67,15 @@ const ageHours = (it: NewsItem, now: number) => (now - Date.parse(it.publishedAt
 function between(v: number, lo: number, hi: number, what: string) {
   assert.ok(v >= lo && v <= hi, `${what}: expected ${lo}..${hi}, got ${v.toFixed(2)}`);
 }
+
+/** Bytes of a feed body from string parts and raw byte runs. */
+function bytes(...parts: Array<string | number[]>): ArrayBuffer {
+  const enc = new TextEncoder();
+  const all = parts.flatMap((p) => (typeof p === "string" ? [...enc.encode(p)] : p));
+  return new Uint8Array(all).buffer as ArrayBuffer;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 async function main() {
   const now = Date.now();
@@ -126,6 +137,55 @@ async function main() {
   await test("rss2: source default lane does not override a clear renewables headline", () => {
     const it = byTitle(rss, "Ørsted cancels Hornsea 4");
     assert.equal(it.lane, "renewables");
+  });
+
+  await test("every item carries key = titleKey(title) for cross-batch dedupe on the client", () => {
+    for (const it of [...rss, ...atom, ...rdf, ...gnews]) assert.equal(it.key, titleKey(it.title));
+    assert.equal(byTitle(rss, "Ørsted cancels Hornsea 4").key, "orsted cancels hornsea 4 offshore wind project after cost blowout");
+  });
+
+  // ------------------------------------------------------------ Dates
+  const cet = (t: number) => new Date(t + HOUR).toUTCString().replace("GMT", "CET");
+  const datesFeed = (lastBuild: number | null) =>
+    `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title><link>https://example.com</link>` +
+    (lastBuild === null ? "" : `<lastBuildDate>${new Date(lastBuild).toUTCString()}</lastBuildDate>`) +
+    `<item><title>Zone name CET is understood</title><link>https://example.com/a</link><pubDate>${cet(now - 3 * HOUR)}</pubDate></item>` +
+    `<item><title>No date at all</title><link>https://example.com/b</link></item>` +
+    `<item><title>Dated two hours in the future</title><link>https://example.com/c</link><pubDate>${new Date(now + 2 * HOUR).toUTCString()}</pubDate></item>` +
+    `</channel></rss>`;
+  const dated = await parseFeedXml(datesFeed(now - 5 * HOUR), src("offshore-energy"));
+  const undated = await parseFeedXml(datesFeed(null), src("offshore-energy"));
+
+  await test("dates: RFC 822 European zone names parse instead of falling back", () => {
+    between(ageHours(byTitle(dated, "Zone name CET"), now), 2.9, 3.1, "CET item age (h)");
+  });
+
+  await test("dates: undated item takes the feed build date, or sits at the back of the 7-day window", () => {
+    between(ageHours(byTitle(dated, "No date at all"), now), 4.9, 5.1, "lastBuildDate fallback age (h)");
+    between(ageHours(byTitle(undated, "No date at all"), now), 7 * 24 - 0.05, 7 * 24, "no build date fallback age (h)");
+  });
+
+  await test("dates: future dates are clamped to now rather than pinned above fresh news", () => {
+    const it = byTitle(dated, "Dated two hours");
+    between(ageHours(it, now), -0.01, 0.05, "future item age (h)");
+  });
+
+  // ------------------------------------------------------------ Entities and charsets
+  await test("stripHtml: named, hex and out-of-range references decode without throwing", () => {
+    assert.equal(stripHtml("<p>Tom&rsquo;s caf&eacute;&hellip; &#x2019;&nbsp;ok</p>"), "Tom’s café… ’ ok");
+    assert.doesNotThrow(() => stripHtml("&#99999999999; &#1114112; done"));
+    assert.equal(stripHtml("1 &lt;b&gt; 2"), "1 <b> 2");
+  });
+
+  await test("decodeFeedBytes: BOM wins, mislabelled UTF-8 survives, genuine latin1 still decodes", () => {
+    const utf8 = bytes("<rss><title>Électricité</title></rss>");
+    assert.ok(decodeFeedBytes(utf8, "text/xml; charset=iso-8859-1").includes("Électricité"), "utf-8 body labelled latin1");
+    const bom = bytes([0xef, 0xbb, 0xbf], '<?xml version="1.0"?><rss/>');
+    assert.ok(decodeFeedBytes(bom, "text/xml; charset=windows-1252").startsWith("<?xml"), "BOM stripped, not turned into mojibake");
+    const latin1 = bytes("<rss><title>caf", [0xe9], "</title></rss>");
+    assert.ok(decodeFeedBytes(latin1, "text/xml; charset=iso-8859-1").includes("café"), "real latin1 with a latin1 label");
+    const decl = bytes('<?xml version="1.0" encoding="ISO-8859-1"?><rss><title>caf', [0xe9], "</title></rss>");
+    assert.ok(decodeFeedBytes(decl, null).includes("café"), "XML declaration used when the header has no charset");
   });
 
   // ------------------------------------------------------------ Atom
@@ -234,7 +294,9 @@ async function main() {
 
   // ------------------------------------------------------------ Classifier
   const neutral: Source = { id: "test", name: "Test", url: "https://example.com/feed", region: "global", lang: "en", lane: "markets" };
-  const cases: Array<{ title: string; lane: LaneId; also?: LaneId[] }> = [
+  const enPolicy: Source = { ...neutral, id: "test-policy", lane: "policy" };
+  const frPress: Source = { ...neutral, id: "test-fr", lang: "fr", lane: "industry" };
+  const cases: Array<{ title: string; lane: LaneId; also?: LaneId[]; not?: LaneId[]; source?: Source }> = [
     { title: "OPEC+ agrees to extend output cuts", lane: "oilgas" },
     { title: "EDF restarts Flamanville reactor", lane: "power" },
     { title: "Ørsted cancels US offshore wind project", lane: "renewables" },
@@ -248,19 +310,76 @@ async function main() {
     { title: "Iran threatens to close Strait of Hormuz after strikes", lane: "policy" },
     { title: "Hydrogène vert : Air Liquide inaugure un électrolyseur de 200 MW en Normandie", lane: "renewables" },
     { title: "Fed signals fewer rate cuts as Treasury yields climb", lane: "markets" },
+    // Acronyms: case-sensitive so folded prose does not collide, capitalised press spellings still count.
+    { title: "Fed cuts rates by 25 bp", lane: "markets", not: ["oilgas"] },
+    { title: "Il y a eu une explosion dans le centre-ville", lane: "industry", not: ["policy"], source: frPress },
+    { title: "Pipeline fed by new wells", lane: "oilgas", not: ["markets"], source: enPolicy },
+    { title: "La banque centrale relève ses taux", lane: "markets", not: ["power"], source: frPress },
+    { title: "L'UE adopte un 18e paquet de sanctions", lane: "policy", source: frPress },
+    { title: "Nato summit opens in The Hague", lane: "policy" },
+    { title: "Eni strikes gas off Cyprus", lane: "oilgas", also: ["policy"] },
+    // Bare "gas" belongs to oil & gas; "gas storage" is not battery storage.
+    { title: "European gas prices jump on supply fears", lane: "markets", also: ["oilgas"] },
+    { title: "EU gas storage hits 90% ahead of winter", lane: "oilgas", also: ["policy"], not: ["renewables"] },
+    // Common words guarded by context.
+    { title: "Dow Jones tumbles as bond yields spike", lane: "markets", not: ["industry"], source: enPolicy },
+    { title: "Blue-chip stocks rally on earnings", lane: "markets", not: ["industry"], source: enPolicy },
+    { title: "A court terme, le gaz restera cher", lane: "oilgas", not: ["policy"], source: frPress },
+    { title: "Olive oil harvest collapses in Spain", lane: "policy", not: ["oilgas"], source: enPolicy },
+    { title: "Shell company network exposed in leak", lane: "policy", not: ["oilgas"], source: enPolicy },
+    { title: "Toyota charging ahead with hybrid plans", lane: "policy", not: ["renewables"], source: enPolicy },
+    { title: "Réforme des retraites, au grand dam des syndicats", lane: "industry", not: ["power"], source: frPress },
+    { title: "Vale of Glamorgan council approves solar farm", lane: "renewables", not: ["industry"], source: enPolicy },
+    { title: "Thousands rally against pension reform in Paris", lane: "policy", not: ["markets"], source: enPolicy },
+    // French-only tokens apply to French sources and never to English ones.
+    { title: "Government takes action on energy bills", lane: "policy", not: ["markets"] },
+    { title: "Protest marches block central Paris", lane: "policy", not: ["markets"], source: enPolicy },
+    { title: "Les actions du secteur chutent", lane: "markets", source: frPress },
+    { title: "Nouvelle loi sur les énergies renouvelables", lane: "renewables", also: ["policy"], source: frPress },
   ];
   for (const c of cases) {
-    await test(`classify: "${c.title}" -> ${c.lane}${c.also ? " (+" + c.also.join(",") + ")" : ""}`, () => {
-      const r = classify(c.title, "", neutral);
+    await test(`classify: "${c.title}" -> ${c.lane}${c.also ? " (+" + c.also.join(",") + ")" : ""}${c.not ? " (not " + c.not.join(",") + ")" : ""}`, () => {
+      const r = classify(c.title, "", c.source ?? neutral);
       assert.equal(r.lane, c.lane, `lanes were ${r.lanes.join(",")}`);
       assert.ok(r.lanes.includes(c.lane));
       for (const extra of c.also ?? []) assert.ok(r.lanes.includes(extra), `lanes ${r.lanes.join(",")} should include ${extra}`);
+      for (const bad of c.not ?? []) assert.ok(!r.lanes.includes(bad), `lanes ${r.lanes.join(",")} should not include ${bad}`);
     });
   }
 
   await test("classify: no keyword hit falls back to the source lane", () => {
     const r = classify("Weekend photo essay", "Pictures from the fair", src("bbc-world"));
     assert.deepEqual(r, { lane: "policy", lanes: ["policy"] });
+  });
+
+  // ------------------------------------------------------------ Markets budget
+  await test("loadQuotes: symbols resolved within the budget are kept, stragglers come back as provider none", async () => {
+    const realFetch = globalThis.fetch;
+    const yahoo = (price: number) =>
+      JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: price, previousClose: price - 1, currency: "USD" }, indicators: { quote: [{ close: [price - 1, price] }] } }] } });
+    const fast = new Set(["BZ=F", "CL=F"]);
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const sym = decodeURIComponent(url.split("/chart/")[1]?.split("?")[0] ?? "");
+      // Slower than the budget below, faster than the provider timeout.
+      if (!fast.has(sym)) await sleep(600);
+      return new Response(yahoo(100), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const t0 = Date.now();
+      const quotes = await loadQuotes(200);
+      assert.ok(Date.now() - t0 < 550, `returned at the budget, not the provider timeout (${Date.now() - t0}ms)`);
+      assert.equal(quotes.length, SYMBOLS.length);
+      assert.deepEqual(quotes.map((q) => q.id), SYMBOLS.map((d) => d.id), "SYMBOLS order kept");
+      assert.equal(quotes.find((q) => q.id === "brent")?.provider, "yahoo");
+      assert.equal(quotes.find((q) => q.id === "wti")?.price, 100);
+      assert.equal(quotes.find((q) => q.id === "henryhub")?.provider, "none", "in flight at the deadline");
+      assert.equal(quotes.find((q) => q.id === "gold")?.provider, "none", "never started");
+      await sleep(700);
+      assert.equal(quotes.find((q) => q.id === "henryhub")?.provider, "none", "late results do not mutate the returned snapshot");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

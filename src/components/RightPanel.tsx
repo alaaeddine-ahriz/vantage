@@ -4,6 +4,9 @@ import { memo, useMemo, useState, type FormEvent } from "react";
 import type { NewsItem } from "@/lib/types";
 import { exportCsv, exportMd, relativeTime, type Health } from "./util";
 
+/** Failed sources listed before the panel folds the rest behind a "+N more" button. */
+const FAILED_SHOWN = 6;
+
 export interface RightPanelProps {
   watchlist: string[];
   watchCounts: number[];
@@ -19,6 +22,7 @@ export interface RightPanelProps {
 
 function RightPanelBase(p: RightPanelProps) {
   const [term, setTerm] = useState("");
+  const [allFailed, setAllFailed] = useState(false);
   const savedTs = useMemo(() => p.saved.map((s) => Date.parse(s.publishedAt) || 0), [p.saved]);
   const add = (e: FormEvent) => {
     e.preventDefault();
@@ -31,6 +35,8 @@ function RightPanelBase(p: RightPanelProps) {
     if (window.confirm(`Clear all ${p.saved.length} saved items?`)) p.onClearSaved();
   };
   const h = p.health;
+  const failedShown = allFailed ? h.failedList : h.failedList.slice(0, FAILED_SHOWN);
+  const failedHidden = h.failedList.length - failedShown.length;
 
   return (
     <aside className="right" aria-label="Watchlist, saved items and source health">
@@ -41,13 +47,16 @@ function RightPanelBase(p: RightPanelProps) {
           <button type="submit">Add</button>
         </form>
         <ul className="wl">
-          {p.watchlist.map((w, i) => (
-            <li key={w}>
-              <button type="button" className="term" title="Search this term" onClick={() => p.onSearchTerm(w)}>{w}</button>
-              <span className="cnt" title="matches in the current window">{p.watchCounts[i] ?? 0}</span>
-              <button type="button" className="plain" aria-label={`Remove ${w} from watchlist`} onClick={() => p.onRemoveWatch(w)}>{"×"}</button>
-            </li>
-          ))}
+          {p.watchlist.map((w, i) => {
+            const n = p.watchCounts[i] ?? 0;
+            return (
+              <li key={w} className={n ? undefined : "zero"}>
+                <button type="button" className="term" title="Search this term" onClick={() => p.onSearchTerm(w)}>{w}</button>
+                <span className={`cnt${n ? "" : " zero"}`} title="matches in the current window">{n}</span>
+                <button type="button" className="plain" aria-label={`Remove ${w} from watchlist`} onClick={() => p.onRemoveWatch(w)}>{"×"}</button>
+              </li>
+            );
+          })}
           {!p.watchlist.length && <li className="muted">no terms: add one above</li>}
         </ul>
       </section>
@@ -87,13 +96,18 @@ function RightPanelBase(p: RightPanelProps) {
         </div>
         {h.failedList.length > 0 && (
           <ul className="fl">
-            {h.failedList.map((s) => (
+            {failedShown.map((s) => (
               <li key={s.id}>
-                <span>{s.name}</span>
-                <span className="muted" title={s.error}>{s.error || "failed"}</span>
+                <span className="nm" title={s.name}>{s.name}</span>
+                <span className="err mono" title={s.error}>{s.error || "failed"}</span>
               </li>
             ))}
           </ul>
+        )}
+        {(failedHidden > 0 || (allFailed && h.failedList.length > FAILED_SHOWN)) && (
+          <button type="button" className="plain morebtn" aria-expanded={allFailed} onClick={() => setAllFailed((o) => !o)}>
+            {allFailed ? "show fewer" : `+${failedHidden} more`}
+          </button>
         )}
       </section>
     </aside>

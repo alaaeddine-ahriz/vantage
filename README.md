@@ -2,6 +2,8 @@
 
 A control center for world news, built for market research in energy and industry. It pulls about 90 live RSS wires, sorts every headline into one of six lanes, runs a market ticker across the top, highlights the terms you are watching and keeps the items you star. No accounts, no API keys, no database: a Next.js app that fetches public feeds and public quote endpoints and stores your preferences in the browser.
 
+![World Watchout desktop view: ticker, filter sidebar, six lane columns, watchlist and source health](docs/screenshot-desktop.png)
+
 ## Features
 
 - **Six lanes**: Oil & Gas, Power & Grid, Renewables & Transition, Industry & Materials, Policy & Geopolitics, Markets & Macro. Lanes are assigned by keyword rules (English and French), with secondary lanes shown when you expand a row. Lanes view or a single Stream view.

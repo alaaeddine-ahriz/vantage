@@ -2,6 +2,7 @@ import { classify } from "./classify";
 import { hashId } from "./feeds";
 import { SYMBOLS } from "./markets";
 import { sourcesForBatch } from "./sources";
+import { titleKey } from "./text";
 import type {
   FeedsResponse,
   Lang,
@@ -277,6 +278,7 @@ export function mockFeeds(batch: number, of: number): FeedsResponse {
       sourceId: src.id,
       source: src.name,
       publisher,
+      key: titleKey(story.title),
       region: src.region,
       lang: src.lang,
       lanes,

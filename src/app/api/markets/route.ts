@@ -5,7 +5,7 @@ import type { MarketsResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const CACHE_CONTROL = "public, s-maxage=60, stale-while-revalidate=300";
 

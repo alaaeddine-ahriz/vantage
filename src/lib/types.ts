@@ -39,6 +39,8 @@ export interface NewsItem {
   source: string;
   /** Real publisher when the item came through an aggregator feed. */
   publisher?: string;
+  /** titleKey(title): lets the client drop the same headline arriving from two batches. */
+  key?: string;
   region: Region;
   lang: Lang;
   lanes: LaneId[];

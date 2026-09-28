@@ -9,8 +9,8 @@ import Sidebar from "./Sidebar";
 import LaneBoard from "./LaneBoard";
 import RightPanel from "./RightPanel";
 import {
-  buildMatcher, fold, loadPrefs, matchesSearch, parseSearch, savePrefs, toItem, toNewsItem, useMediaQuery, useNow,
-  DEFAULT_PREFS, REFRESH_MS, SAVED_MAX, WINDOWS,
+  buildMatcher, fold, isWire, loadPrefs, matchesSearch, parseSearch, savePrefs, toItem, toNewsItem, useMediaQuery, useNow,
+  DEFAULT_PREFS, FETCH_TIMEOUT_MS, REFRESH_MS, SAVED_MAX, WATCHLIST_MAX, WINDOWS,
   type Counts, type Health, type Item, type Prefs, type View,
 } from "./util";
 
@@ -20,7 +20,7 @@ interface Batch {
 }
 
 const emptyBatches = (): Batch[] => Array.from({ length: FEED_BATCHES }, () => ({ data: null, error: null }));
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : "request failed");
+const errMsg = (e: unknown) => (e instanceof Error ? (e.name === "TimeoutError" ? "timeout" : e.message) : "request failed");
 
 export default function Dashboard() {
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
@@ -29,6 +29,7 @@ export default function Dashboard() {
   const [quotes, setQuotes] = useState<Quote[] | null>(null);
   const [quotesError, setQuotesError] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [firstDone, setFirstDone] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(0);
   const [nextAt, setNextAt] = useState(0);
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
@@ -38,7 +39,7 @@ export default function Dashboard() {
   const fresh = useRef<Set<string>>(new Set());
   const inflight = useRef(false);
   const lastStart = useRef(0);
-  const narrow = useMediaQuery("(max-width: 859px)");
+  const { match: narrow, known: layoutKnown } = useMediaQuery("(max-width: 859px)");
   const tick = useNow(30_000);
   const now = tick || Date.now();
 
@@ -56,28 +57,54 @@ export default function Dashboard() {
   }, [prefs.theme, ready]);
 
   /* ---------- data */
-  const fetchBatch = useCallback(async (i: number, markNew: boolean) => {
+  /** Resolves true when the batch landed. Sources the server reports as failed keep their previous items. */
+  const fetchBatch = useCallback(async (i: number, markNew: boolean): Promise<boolean> => {
     try {
-      const res = await fetch(`/api/feeds?batch=${i}&of=${FEED_BATCHES}`, { cache: "no-store" });
+      const res = await fetch(`/api/feeds?batch=${i}&of=${FEED_BATCHES}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as FeedsResponse;
       const items = (data.items ?? []).map(toItem);
+      const sources = data.sources ?? [];
       for (const it of items) {
         if (seen.current.has(it.id)) continue;
         seen.current.add(it.id);
         if (markNew) fresh.current.add(it.id);
       }
       if (markNew) setNewIds(new Set(fresh.current));
-      setBatches((prev) => prev.map((b, k) => (k === i ? { data: { items, sources: data.sources ?? [] }, error: null } : b)));
+      const failed = new Set(sources.filter((s) => !s.ok).map((s) => s.id));
+      setBatches((prev) =>
+        prev.map((b, k) => {
+          if (k !== i) return b;
+          if (!failed.size || !b.data) return { data: { items, sources }, error: null };
+          /* a source that failed or timed out this round keeps what it had, so headlines do not blink in and out */
+          const ids = new Set(items.map((it) => it.id));
+          const kept = b.data.items.filter((it) => failed.has(it.sourceId) && !ids.has(it.id));
+          return { data: { items: kept.length ? [...items, ...kept] : items, sources }, error: null };
+        }),
+      );
+      return true;
     } catch (e) {
       const error = errMsg(e);
-      setBatches((prev) => prev.map((b, k) => (k === i ? { ...b, error } : b)));
+      /* the headlines stay on the board, but the batch's sources are reported as failed instead of a stale "ok" */
+      setBatches((prev) =>
+        prev.map((b, k) => {
+          if (k !== i) return b;
+          const data = b.data
+            ? { items: b.data.items, sources: b.data.sources.map((s) => ({ ...s, ok: false, error: `batch: ${error}` })) }
+            : null;
+          return { data, error };
+        }),
+      );
+      return false;
     }
   }, []);
 
   const fetchMarkets = useCallback(async () => {
     try {
-      const res = await fetch("/api/markets", { cache: "no-store" });
+      const res = await fetch("/api/markets", { cache: "no-store", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as MarketsResponse;
       setQuotes(data.quotes ?? []);
@@ -98,10 +125,12 @@ export default function Dashboard() {
     setLoading(true);
     setNextAt(started + REFRESH_MS);
     const jobs = Array.from({ length: FEED_BATCHES }, (_, i) => fetchBatch(i, markNew));
-    await Promise.allSettled([...jobs, fetchMarkets()]);
+    const [results] = await Promise.all([Promise.allSettled(jobs), fetchMarkets()]);
     inflight.current = false;
     setLoading(false);
-    setUpdatedAt(Date.now());
+    setFirstDone(true);
+    /* the timestamp only moves when at least one batch actually landed */
+    if (results.some((r) => r.status === "fulfilled" && r.value)) setUpdatedAt(Date.now());
   }, [fetchBatch, fetchMarkets]);
 
   useEffect(() => {
@@ -125,9 +154,25 @@ export default function Dashboard() {
   }, [refresh]);
 
   /* ---------- derived lists */
+  /* merged by id, then by normalised title: a publisher's own feed wins over the same headline on a wire */
   const all = useMemo(() => {
     const map = new Map<string, Item>();
-    for (const b of batches) if (b.data) for (const it of b.data.items) if (!map.has(it.id)) map.set(it.id, it);
+    const keys = new Set<string>();
+    const pass = (wire: boolean) => {
+      for (const b of batches) {
+        if (!b.data) continue;
+        for (const it of b.data.items) {
+          if (isWire(it.sourceId) !== wire || map.has(it.id)) continue;
+          if (it.key.length > 20) {
+            if (keys.has(it.key)) continue;
+            keys.add(it.key);
+          }
+          map.set(it.id, it);
+        }
+      }
+    };
+    pass(false);
+    pass(true);
     return Array.from(map.values()).sort((a, b) => b.ts - a.ts);
   }, [batches]);
 
@@ -218,9 +263,10 @@ export default function Dashboard() {
   const clearSaved = useCallback(() => setPrefs((p) => ({ ...p, saved: [] })), []);
   const addWatch = useCallback((term: string) => {
     setPrefs((p) => {
-      const f = fold(term.trim());
+      const t = term.trim();
+      const f = fold(t);
       if (!f || p.watchlist.some((w) => fold(w) === f)) return p;
-      return { ...p, watchlist: [...p.watchlist, term.trim()].slice(0, 200) };
+      return { ...p, watchlist: [...p.watchlist, t].slice(0, WATCHLIST_MAX) };
     });
   }, []);
   const removeWatch = useCallback((term: string) => setPrefs((p) => ({ ...p, watchlist: p.watchlist.filter((w) => w !== term) })), []);
@@ -279,35 +325,41 @@ export default function Dashboard() {
         onRefresh={onRefresh}
       />
       <Ticker quotes={quotes} error={quotesError} />
+      {/* the composition below depends on the viewport, so it waits for the media query instead of repainting from desktop to phone */}
       <div className="body">
-        <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} />
-        <main className="main" aria-label="Headlines">
-          <LaneBoard
-            items={shown}
-            view={prefs.view}
-            lanes={prefs.lanes}
-            narrow={narrow}
-            loading={loading && all.length === 0}
-            matcher={matcher}
-            hits={hits}
-            savedIds={savedIds}
-            newIds={newIds}
-            now={now}
-            onStar={toggleSaved}
-          />
-        </main>
-        <RightPanel
-          watchlist={prefs.watchlist}
-          watchCounts={watchCounts}
-          saved={prefs.saved}
-          health={health}
-          now={now}
-          onAddWatch={addWatch}
-          onRemoveWatch={removeWatch}
-          onSearchTerm={setSearch}
-          onUnsave={unsave}
-          onClearSaved={clearSaved}
-        />
+        {layoutKnown && (
+          <>
+            <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} />
+            <main className="main" aria-label="Headlines">
+              <LaneBoard
+                items={shown}
+                view={prefs.view}
+                lanes={prefs.lanes}
+                narrow={narrow}
+                loading={(loading || !firstDone) && all.length === 0}
+                failed={firstDone && !loading && all.length === 0 && batchErrors > 0}
+                matcher={matcher}
+                hits={hits}
+                savedIds={savedIds}
+                newIds={newIds}
+                now={now}
+                onStar={toggleSaved}
+              />
+            </main>
+            <RightPanel
+              watchlist={prefs.watchlist}
+              watchCounts={watchCounts}
+              saved={prefs.saved}
+              health={health}
+              now={now}
+              onAddWatch={addWatch}
+              onRemoveWatch={removeWatch}
+              onSearchTerm={setSearch}
+              onUnsave={unsave}
+              onClearSaved={clearSaved}
+            />
+          </>
+        )}
       </div>
     </div>
   );

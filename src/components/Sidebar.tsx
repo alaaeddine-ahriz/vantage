@@ -37,8 +37,8 @@ function SidebarBase({ prefs, counts, statusById, narrow, update }: SidebarProps
         <div className="lbl">
           Lanes
           <span className="btns">
-            <button type="button" onClick={() => update({ lanes: LANES.map((l) => l.id) })}>all</button>
-            <button type="button" onClick={() => update({ lanes: [] })}>none</button>
+            <button type="button" aria-label="Enable all lanes" onClick={() => update({ lanes: LANES.map((l) => l.id) })}>all</button>
+            <button type="button" aria-label="Disable all lanes" onClick={() => update({ lanes: [] })}>none</button>
           </span>
         </div>
         {LANES.map((l) => {
@@ -87,8 +87,8 @@ function SidebarBase({ prefs, counts, statusById, narrow, update }: SidebarProps
             Sources {srcOpen ? "▴" : "▾"} <span className="cnt">{enabledSources}/{SOURCES.length}</span>
           </button>
           <span className="btns">
-            <button type="button" onClick={() => update({ disabledSources: [] })}>all</button>
-            <button type="button" onClick={() => update({ disabledSources: SOURCES.map((s) => s.id) })}>none</button>
+            <button type="button" aria-label="Enable all sources" onClick={() => update({ disabledSources: [] })}>all</button>
+            <button type="button" aria-label="Disable all sources" onClick={() => update({ disabledSources: SOURCES.map((s) => s.id) })}>none</button>
           </span>
         </div>
         {srcOpen && (

@@ -18,6 +18,8 @@ export interface GlobeViewProps {
   items: Map<string, { id: string; title: string; source: string; lane: LaneId; ts: number; link: string }>;
   theme: "dark" | "light";
   onSelectCountry?: (iso2: string | null) => void;
+  /** Opens the country card (Countries view) for the selected country. */
+  onOpenCard?: (iso2: string) => void;
   selected?: string | null;
 }
 
@@ -191,7 +193,7 @@ function hasWebGL(): boolean {
 
 type Status = "loading" | "ready" | "nowebgl";
 
-export default function GlobeView({ points, flows, items, theme, onSelectCountry, selected = null }: GlobeViewProps) {
+export default function GlobeView({ points, flows, items, theme, onSelectCountry, onOpenCard, selected = null }: GlobeViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   /* globe.gl's chained instance type fights every accessor signature; the surface used here is small and stable */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -502,6 +504,11 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
           <div className={css.sheetHead}>
             <span className={css.sheetTitle}>{selectedName}</span>
             <span className="cnt">{selectedPoint?.count ?? 0} mention{(selectedPoint?.count ?? 0) === 1 ? "" : "s"}</span>
+            {onOpenCard && (
+              <button type="button" className={css.openCard} onClick={() => onOpenCard(selected)} title="Open the country card: ratios, trends, peers">
+                Open card
+              </button>
+            )}
             <button type="button" className={css.close} aria-label="clear country filter" onClick={() => onSelectCountry?.(null)}>
               x
             </button>

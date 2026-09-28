@@ -30,13 +30,14 @@ export interface Health {
   failedList: SourceStatus[];
 }
 
-export type View = "lanes" | "stream" | "globe" | "graph" | "intel";
+export type View = "lanes" | "stream" | "globe" | "graph" | "intel" | "countries";
 export const VIEWS: { id: View; label: string }[] = [
   { id: "lanes", label: "Lanes" },
   { id: "stream", label: "Stream" },
   { id: "globe", label: "Globe" },
   { id: "graph", label: "Graph" },
   { id: "intel", label: "Intel" },
+  { id: "countries", label: "Countries" },
 ];
 export type Theme = "dark" | "light";
 
@@ -70,6 +71,10 @@ export interface Prefs {
   disabledSources: string[];
   watchOnly: boolean;
   theme: Theme;
+  /** Countries overlaid on the country card, ISO2 upper case, at most COMPARE_MAX. */
+  compare: string[];
+  /** Last tab opened on the country card. */
+  countryTab?: string;
 }
 
 export const DEFAULT_WATCHLIST = [
@@ -88,6 +93,7 @@ export const DEFAULT_PREFS: Prefs = {
   disabledSources: [],
   watchOnly: false,
   theme: "dark",
+  compare: [],
 };
 
 export const REGION_CODE: Record<Region, string> = {
@@ -100,6 +106,7 @@ export const REFRESH_MS = 5 * 60_000;
 export const PAGE = 150;
 export const SAVED_MAX = 500;
 export const WATCHLIST_MAX = 200;
+export const COMPARE_MAX = 4;
 /** Requests that hang longer than this are abandoned so the refresh cycle keeps running. */
 export const FETCH_TIMEOUT_MS = 45_000;
 
@@ -356,6 +363,18 @@ function sanitizeWatchlist(v: unknown, fallback: string[]): string[] {
   return out;
 }
 
+/** Upper-case ISO2 codes, deduplicated, capped. */
+export function sanitizeCompare(v: unknown): string[] {
+  if (!isStrArr(v)) return [];
+  const out: string[] = [];
+  for (const raw of v) {
+    const c = raw.trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(c) && !out.includes(c)) out.push(c);
+    if (out.length >= COMPARE_MAX) break;
+  }
+  return out;
+}
+
 export function sanitizePrefs(raw: unknown): Prefs {
   const d = DEFAULT_PREFS;
   if (!raw || typeof raw !== "object") return d;
@@ -371,6 +390,8 @@ export function sanitizePrefs(raw: unknown): Prefs {
     disabledSources: isStrArr(r.disabledSources) ? Array.from(new Set(r.disabledSources)) : d.disabledSources,
     watchOnly: r.watchOnly === true,
     theme: r.theme === "light" ? "light" : "dark",
+    compare: sanitizeCompare(r.compare),
+    ...(typeof r.countryTab === "string" && r.countryTab ? { countryTab: r.countryTab } : {}),
   };
 }
 

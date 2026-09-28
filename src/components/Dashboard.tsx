@@ -12,6 +12,7 @@ import Sidebar from "./Sidebar";
 import LaneBoard from "./LaneBoard";
 import RightPanel from "./RightPanel";
 import IntelPanel, { type BriefState } from "./IntelPanel";
+import CountryView from "./CountryView";
 import {
   buildMatcher, fold, isWire, loadPrefs, matchesSearch, parseSearch, savePrefs, toItem, toNewsItem, useMediaQuery, useNow,
   DEFAULT_PREFS, FETCH_TIMEOUT_MS, REFRESH_MS, SAVED_MAX, VIEWS, WATCHLIST_MAX, WINDOWS,
@@ -399,6 +400,17 @@ export default function Dashboard() {
   const removeWatch = useCallback((term: string) => setPrefs((p) => ({ ...p, watchlist: p.watchlist.filter((w) => w !== term) })), []);
   const onRefresh = useCallback(() => void refresh(), [refresh]);
   const selectCountry = useCallback((iso2: string | null) => setCountry((c) => (iso2 && c === iso2 ? null : iso2)), []);
+  /* the country card: the globe sheet opens it, and its News button returns to the lanes with the country filter kept */
+  const openCard = useCallback((iso2: string) => {
+    setCountry(iso2.toUpperCase());
+    setPrefs((p) => ({ ...p, view: "countries" }));
+  }, []);
+  const showCountryNews = useCallback((iso2: string) => {
+    setCountry(iso2.toUpperCase());
+    setPrefs((p) => ({ ...p, view: "lanes" }));
+  }, []);
+  const setCompare = useCallback((compare: string[]) => setPrefs((p) => ({ ...p, compare })), []);
+  const setCountryTab = useCallback((countryTab: string) => setPrefs((p) => ({ ...p, countryTab })), []);
 
   /* ---------- AI brief: the currently visible items, newest first, capped, with the local patterns and watchlist */
   const briefAbort = useRef<AbortController | null>(null);
@@ -518,11 +530,11 @@ export default function Dashboard() {
         {layoutKnown && (
           <>
             <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} />
-            <main className="main" aria-label={prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : "Headlines"}>
+            <main className="main" aria-label={prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : prefs.view === "countries" ? "Countries" : "Headlines"}>
               {prefs.view === "globe" ? (
                 <div className="view-fill">
                   {snapshot ? (
-                    <GlobeView points={snapshot.points} flows={snapshot.flows} items={itemMap} theme={prefs.theme} onSelectCountry={selectCountry} selected={country} />
+                    <GlobeView points={snapshot.points} flows={snapshot.flows} items={itemMap} theme={prefs.theme} onSelectCountry={selectCountry} onOpenCard={openCard} selected={country} />
                   ) : (
                     <div className="empty">loading</div>
                   )}
@@ -535,6 +547,21 @@ export default function Dashboard() {
                     <div className="empty">loading</div>
                   )}
                 </div>
+              ) : prefs.view === "countries" ? (
+                <CountryView
+                  snapshot={snapshot}
+                  items={itemMap}
+                  selected={country}
+                  onSelect={setCountry}
+                  compare={prefs.compare}
+                  onCompare={setCompare}
+                  theme={prefs.theme}
+                  window={prefs.window}
+                  onSearch={setSearch}
+                  onShowNews={showCountryNews}
+                  tab={prefs.countryTab}
+                  onTab={setCountryTab}
+                />
               ) : prefs.view === "intel" ? (
                 <IntelPanel
                   snapshot={viewSnapshot}

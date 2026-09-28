@@ -1,0 +1,108 @@
+[
+  {
+    "page": 1,
+    "pages": 1,
+    "per_page": "20000",
+    "total": 6,
+    "sourceid": "3",
+    "lastupdated": "2026-07-01"
+  },
+  [
+    {
+      "indicator": {
+        "id": "PV.EST",
+        "value": "Political Stability and Absence of Violence/Terrorism: Estimate"
+      },
+      "country": {
+        "id": "FR",
+        "value": "France"
+      },
+      "countryiso3code": "FRA",
+      "date": "2024",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "PV.EST",
+        "value": "Political Stability and Absence of Violence/Terrorism: Estimate"
+      },
+      "country": {
+        "id": "FR",
+        "value": "France"
+      },
+      "countryiso3code": "FRA",
+      "date": "2023",
+      "value": 0.24,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "PV.EST",
+        "value": "Political Stability and Absence of Violence/Terrorism: Estimate"
+      },
+      "country": {
+        "id": "FR",
+        "value": "France"
+      },
+      "countryiso3code": "FRA",
+      "date": "2022",
+      "value": 0.29,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "PV.EST",
+        "value": "Political Stability and Absence of Violence/Terrorism: Estimate"
+      },
+      "country": {
+        "id": "FR",
+        "value": "France"
+      },
+      "countryiso3code": "FRA",
+      "date": "2021",
+      "value": 0.35,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "RL.EST",
+        "value": "Rule of Law: Estimate"
+      },
+      "country": {
+        "id": "FR",
+        "value": "France"
+      },
+      "countryiso3code": "FRA",
+      "date": "2023",
+      "value": 1.28,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "RL.EST",
+        "value": "Rule of Law: Estimate"
+      },
+      "country": {
+        "id": "FR",
+        "value": "France"
+      },
+      "countryiso3code": "FRA",
+      "date": "2022",
+      "value": 1.31,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    }
+  ]
+]

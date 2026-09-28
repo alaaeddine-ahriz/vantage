@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-feeds.ts && tsx scripts/test-brief.ts && tsx scripts/test-intel.ts"
+    "test": "tsx scripts/test-feeds.ts && tsx scripts/test-brief.ts && tsx scripts/test-intel.ts && tsx scripts/test-country.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

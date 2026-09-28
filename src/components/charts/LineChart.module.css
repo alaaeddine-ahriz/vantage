@@ -1,0 +1,25 @@
+.wrap { position: relative; width: 100%; min-width: 0; }
+.svg { display: block; max-width: 100%; height: auto; overflow: visible; outline-offset: 2px; }
+.empty { padding: 20px; text-align: center; color: var(--muted); font-size: 12px; }
+.grid { stroke: var(--border); stroke-width: 1; }
+.axis { stroke: var(--border); stroke-width: 1; }
+.tick { fill: var(--muted); font-family: var(--mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+.note { fill: var(--muted); font-size: 10px; }
+.end { fill: var(--text); font-family: var(--mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+.ref { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.8; }
+.series .line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.series .lineEst { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; stroke-dasharray: 4 4; }
+.seriesRef .line, .seriesRef .lineEst { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 3 3; }
+.dotSolo { fill: currentColor; }
+.hair { stroke: var(--muted); stroke-width: 1; }
+.marker { fill: currentColor; stroke: var(--bg); stroke-width: 2; pointer-events: none; }
+.tip { position: absolute; top: 8px; z-index: 2; pointer-events: none; min-width: 120px; padding: 5px 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--border); border-radius: 3px; font-size: 11px; line-height: 1.4; }
+.tipYear { font-family: var(--mono); color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+.tipRow { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.tipRow b { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.tipLabel { color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+.est { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); border: 1px solid var(--border); border-radius: 2px; padding: 0 3px; }
+.key { display: inline-block; width: 12px; height: 0; border-top: 2px solid currentColor; flex: none; }
+.keyRef { display: inline-block; width: 12px; height: 0; border-top: 2px dashed var(--muted); flex: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; padding: 0 2px; font-size: 11px; color: var(--muted); }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }

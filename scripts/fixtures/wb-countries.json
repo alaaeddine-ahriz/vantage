@@ -1,0 +1,178 @@
+[
+  {
+    "page": 1,
+    "pages": 1,
+    "per_page": "400",
+    "total": 6
+  },
+  [
+    {
+      "id": "FRA",
+      "iso2Code": "FR",
+      "name": "France",
+      "region": {
+        "id": "ECS",
+        "iso2code": "",
+        "value": "Europe & Central Asia"
+      },
+      "adminregion": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "incomeLevel": {
+        "id": "",
+        "iso2code": "",
+        "value": "High income"
+      },
+      "lendingType": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "capitalCity": "",
+      "longitude": "",
+      "latitude": ""
+    },
+    {
+      "id": "DEU",
+      "iso2Code": "DE",
+      "name": "Germany",
+      "region": {
+        "id": "ECS",
+        "iso2code": "",
+        "value": "Europe & Central Asia"
+      },
+      "adminregion": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "incomeLevel": {
+        "id": "",
+        "iso2code": "",
+        "value": "High income"
+      },
+      "lendingType": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "capitalCity": "",
+      "longitude": "",
+      "latitude": ""
+    },
+    {
+      "id": "USA",
+      "iso2Code": "US",
+      "name": "United States",
+      "region": {
+        "id": "NAC",
+        "iso2code": "",
+        "value": "North America"
+      },
+      "adminregion": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "incomeLevel": {
+        "id": "",
+        "iso2code": "",
+        "value": "High income"
+      },
+      "lendingType": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "capitalCity": "",
+      "longitude": "",
+      "latitude": ""
+    },
+    {
+      "id": "NGA",
+      "iso2Code": "NG",
+      "name": "Nigeria",
+      "region": {
+        "id": "SSF",
+        "iso2code": "",
+        "value": "Sub-Saharan Africa"
+      },
+      "adminregion": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "incomeLevel": {
+        "id": "",
+        "iso2code": "",
+        "value": "Lower middle income"
+      },
+      "lendingType": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "capitalCity": "",
+      "longitude": "",
+      "latitude": ""
+    },
+    {
+      "id": "WLD",
+      "iso2Code": "1W",
+      "name": "World",
+      "region": {
+        "id": "NA",
+        "iso2code": "",
+        "value": "Aggregates"
+      },
+      "adminregion": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "incomeLevel": {
+        "id": "",
+        "iso2code": "",
+        "value": "Aggregates"
+      },
+      "lendingType": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "capitalCity": "",
+      "longitude": "",
+      "latitude": ""
+    },
+    {
+      "id": "ARB",
+      "iso2Code": "1A",
+      "name": "Arab World",
+      "region": {
+        "id": "NA",
+        "iso2code": "",
+        "value": "Aggregates"
+      },
+      "adminregion": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "incomeLevel": {
+        "id": "",
+        "iso2code": "",
+        "value": "Aggregates"
+      },
+      "lendingType": {
+        "id": "",
+        "iso2code": "",
+        "value": ""
+      },
+      "capitalCity": "",
+      "longitude": "",
+      "latitude": ""
+    }
+  ]
+]

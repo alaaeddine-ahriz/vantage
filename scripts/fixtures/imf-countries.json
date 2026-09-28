@@ -1,0 +1,23 @@
+{
+  "countries": {
+    "FRA": {
+      "label": "France"
+    },
+    "DEU": {
+      "label": "Germany"
+    },
+    "USA": {
+      "label": "United States"
+    },
+    "NGA": {
+      "label": "Nigeria"
+    },
+    "IND": {
+      "label": "India"
+    }
+  },
+  "api": {
+    "version": "1",
+    "output-method": "json"
+  }
+}

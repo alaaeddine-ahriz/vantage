@@ -136,6 +136,18 @@
   font-weight: 600;
 }
 
+.openCard {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 7px;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.openCard:hover {
+  color: var(--text);
+}
+
 .close {
   flex: none;
   padding: 0 5px;

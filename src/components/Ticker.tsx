@@ -24,7 +24,8 @@ function Spark({ series }: { series?: number[] }) {
 function Tile({ q }: { q: Quote }) {
   const pct = q.changePct;
   const dir = pct === null || !Number.isFinite(pct) || pct === 0 ? "flat" : pct > 0 ? "up" : "down";
-  const unit = [q.currency, q.unit].filter(Boolean).join("/");
+  /* unit already names the currency (USD/bbl, EUR/MWh); only bare instruments fall back to the provider currency. */
+  const unit = q.unit ?? q.currency ?? "";
   const title = [q.symbol, q.note ?? `provider: ${q.provider}`, q.time ? `as of ${q.time}` : ""].filter(Boolean).join(" | ");
   return (
     <div className={`tile ${dir}`} title={title} role="listitem">

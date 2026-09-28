@@ -1,18 +1,97 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import type { FeedsResponse, MarketsResponse, Quote, SourceStatus } from "@/lib/types";
+import type { Brief, BriefRequest, GraphLink, GraphNode, IntelSnapshot } from "@/lib/intel-types";
+import { buildIntel } from "@/lib/intel";
 import { FEED_BATCHES, SOURCES } from "@/lib/sources";
 import TopBar from "./TopBar";
 import Ticker from "./Ticker";
 import Sidebar from "./Sidebar";
 import LaneBoard from "./LaneBoard";
 import RightPanel from "./RightPanel";
+import IntelPanel, { type BriefState } from "./IntelPanel";
 import {
   buildMatcher, fold, isWire, loadPrefs, matchesSearch, parseSearch, savePrefs, toItem, toNewsItem, useMediaQuery, useNow,
-  DEFAULT_PREFS, FETCH_TIMEOUT_MS, REFRESH_MS, SAVED_MAX, WATCHLIST_MAX, WINDOWS,
-  type Counts, type Health, type Item, type Prefs, type View,
+  DEFAULT_PREFS, FETCH_TIMEOUT_MS, REFRESH_MS, SAVED_MAX, VIEWS, WATCHLIST_MAX, WINDOWS,
+  type Counts, type Health, type Item, type Prefs, type View, type ViewItem,
 } from "./util";
+
+/* the globe (three.js) and the force graph (canvas) only run in the browser and load on first use */
+const GlobeView = dynamic(() => import("./GlobeView"), { ssr: false, loading: () => <div className="empty">loading globe</div> });
+const GraphView = dynamic(() => import("./GraphView"), { ssr: false, loading: () => <div className="empty">loading graph</div> });
+
+const BRIEF_KEY = "ww:brief:v1";
+/** Newest items sent to the brief; the route accepts up to 400. */
+const BRIEF_ITEMS = 250;
+const BRIEF_TIMEOUT_MS = 110_000;
+
+function loadBrief(): Brief | null {
+  try {
+    const raw = window.sessionStorage.getItem(BRIEF_KEY);
+    if (!raw) return null;
+    const b = JSON.parse(raw) as Brief;
+    return b && typeof b === "object" && typeof b.headline === "string" && Array.isArray(b.links) ? b : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveBrief(b: Brief | null) {
+  try {
+    if (b) window.sessionStorage.setItem(BRIEF_KEY, JSON.stringify(b));
+    else window.sessionStorage.removeItem(BRIEF_KEY);
+  } catch {
+    /* storage may be unavailable */
+  }
+}
+
+/** Entity id whose label or alias equals, contains or is contained in the free-text label, else null. */
+function resolveEntity(label: string, snapshot: IntelSnapshot): string | null {
+  const f = fold(label.trim());
+  if (f.length < 2) return null;
+  let partial: string | null = null;
+  for (const e of Object.values(snapshot.entities)) {
+    const names = [fold(e.label), ...e.aliases];
+    for (const n of names) {
+      if (!n) continue;
+      if (n === f) return e.id;
+      /* partial matches need 4+ characters so "EU" never lands inside "Reuters" */
+      if (!partial && f.length >= 4 && n.length >= 4 && (n.includes(f) || f.includes(n))) partial = e.id;
+    }
+  }
+  return partial;
+}
+
+/** Adds the brief's links to the local graph: known labels attach to entity nodes, unknown ones become ai event nodes. */
+function mergeBriefIntoGraph(snapshot: IntelSnapshot, brief: Brief | null): IntelSnapshot["graph"] {
+  if (!brief || !brief.links.length) return snapshot.graph;
+  const nodes = new Map(snapshot.graph.nodes.map((n) => [n.id, n]));
+  const links: GraphLink[] = [...snapshot.graph.links];
+  const nodeFor = (label: string, itemIds: string[]): string => {
+    const eid = resolveEntity(label, snapshot);
+    if (eid) {
+      if (!nodes.has(eid)) {
+        const e = snapshot.entities[eid];
+        nodes.set(eid, { id: eid, kind: e.kind, label: e.label, weight: 1, itemIds: [...itemIds], ai: true });
+      }
+      return eid;
+    }
+    const id = `ai:${fold(label).replace(/[^a-z0-9]+/g, "-")}`;
+    const cur = nodes.get(id);
+    if (cur) cur.weight += 1;
+    else nodes.set(id, { id, kind: "event", label: label.trim(), weight: 1, itemIds: [...itemIds], ai: true } satisfies GraphNode);
+    return id;
+  };
+  for (const l of brief.links) {
+    const source = nodeFor(l.source, l.itemIds);
+    const target = nodeFor(l.target, l.itemIds);
+    if (source === target) continue;
+    links.push({ source, target, kind: l.kind, weight: 1, label: l.label, itemIds: l.itemIds, ai: true });
+  }
+  return { nodes: [...nodes.values()], links };
+}
 
 interface Batch {
   data: { items: Item[]; sources: SourceStatus[] } | null;
@@ -34,6 +113,11 @@ export default function Dashboard() {
   const [nextAt, setNextAt] = useState(0);
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
+  const [country, setCountry] = useState<string | null>(null);
+  const [graphFocus, setGraphFocus] = useState<string | null>(null);
+  const [brief, setBrief] = useState<Brief | null>(null);
+  const [briefState, setBriefState] = useState<BriefState>("idle");
+  const [briefError, setBriefError] = useState<string | undefined>(undefined);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const seen = useRef<Set<string>>(new Set());
   const fresh = useRef<Set<string>>(new Set());
@@ -47,6 +131,7 @@ export default function Dashboard() {
   useEffect(() => {
     const p = loadPrefs();
     if (p) setPrefs(p);
+    setBrief(loadBrief());
     setReady(true);
   }, []);
   useEffect(() => {
@@ -246,9 +331,46 @@ export default function Dashboard() {
 
   const savedIds = useMemo(() => new Set(prefs.saved.map((s) => s.id)), [prefs.saved]);
 
+  /* ---------- intelligence layer: entities, geo, graph and patterns over the filtered set */
+  const watchFn = useCallback((text: string) => !!matcher && matcher.re.test(fold(text)), [matcher]);
+  const snapshot = useMemo<IntelSnapshot | null>(
+    () => (firstDone || all.length ? buildIntel(shown, { now, watch: watchFn }) : null),
+    [shown, now, watchFn, firstDone, all.length],
+  );
+
+  /* entity ids of the selected country; items mentioning any of them stay visible */
+  const countryEntities = useMemo(() => {
+    const s = new Set<string>();
+    if (country && snapshot) for (const e of Object.values(snapshot.entities)) if (e.kind === "country" && e.iso2 === country) s.add(e.id);
+    return s;
+  }, [country, snapshot]);
+
+  const visible = useMemo(() => {
+    if (!country || !snapshot) return shown;
+    if (!countryEntities.size) return [];
+    return shown.filter((it) => (snapshot.mentions[it.id] ?? []).some((eid) => countryEntities.has(eid)));
+  }, [shown, country, snapshot, countryEntities]);
+
+  /* the graph and intel views follow the country filter; the globe keeps every point so another country can be picked */
+  const viewSnapshot = useMemo<IntelSnapshot | null>(
+    () => (country && snapshot ? buildIntel(visible, { now, watch: watchFn }) : snapshot),
+    [country, snapshot, visible, now, watchFn],
+  );
+
+  const itemMap = useMemo(() => {
+    const m = new Map<string, ViewItem>();
+    for (const it of shown) m.set(it.id, { id: it.id, title: it.title, source: it.publisher ?? it.source, lane: it.lane, ts: it.ts, link: it.link });
+    return m;
+  }, [shown]);
+
+  const graph = useMemo(() => (viewSnapshot ? mergeBriefIntoGraph(viewSnapshot, brief) : { nodes: [] as GraphNode[], links: [] as GraphLink[] }), [viewSnapshot, brief]);
+
   /* ---------- handlers */
   const update = useCallback((patch: Partial<Prefs>) => setPrefs((p) => ({ ...p, ...patch })), []);
-  const toggleView = useCallback(() => setPrefs((p) => ({ ...p, view: p.view === "lanes" ? "stream" : "lanes" })), []);
+  const toggleView = useCallback(
+    () => setPrefs((p) => ({ ...p, view: VIEWS[(VIEWS.findIndex((v) => v.id === p.view) + 1) % VIEWS.length].id })),
+    [],
+  );
   const toggleWatchOnly = useCallback(() => setPrefs((p) => ({ ...p, watchOnly: !p.watchOnly })), []);
   const toggleTheme = useCallback(() => setPrefs((p) => ({ ...p, theme: p.theme === "dark" ? "light" : "dark" })), []);
   const setView = useCallback((view: View) => setPrefs((p) => ({ ...p, view })), []);
@@ -271,6 +393,63 @@ export default function Dashboard() {
   }, []);
   const removeWatch = useCallback((term: string) => setPrefs((p) => ({ ...p, watchlist: p.watchlist.filter((w) => w !== term) })), []);
   const onRefresh = useCallback(() => void refresh(), [refresh]);
+  const selectCountry = useCallback((iso2: string | null) => setCountry((c) => (iso2 && c === iso2 ? null : iso2)), []);
+
+  /* ---------- AI brief: the currently visible items, newest first, capped, with the local patterns and watchlist */
+  const briefAbort = useRef<AbortController | null>(null);
+  const generateBrief = useCallback(async () => {
+    if (!viewSnapshot || briefState === "loading") return;
+    const list = visible.slice(0, BRIEF_ITEMS);
+    if (!list.length) {
+      setBriefState("error");
+      setBriefError("nothing to brief: widen the window or clear filters");
+      return;
+    }
+    const langs = { en: 0, fr: 0 };
+    for (const it of list) if (it.lang === "fr") langs.fr++; else langs.en++;
+    const body: BriefRequest = {
+      window: prefs.window + (country ? ` ${country}` : ""),
+      lang: langs.fr > langs.en ? "fr" : "en",
+      items: list.map((it) => ({
+        id: it.id,
+        title: it.title,
+        source: it.publisher ?? it.source,
+        publishedAt: it.publishedAt,
+        lane: it.lane,
+        region: it.region,
+        ...(it.summary ? { summary: it.summary.slice(0, 240) } : {}),
+      })),
+      patterns: viewSnapshot.patterns.slice(0, 12).map((p) => ({ title: p.title, detail: p.detail })),
+      watchlist: prefs.watchlist,
+    };
+    briefAbort.current?.abort();
+    const ctrl = new AbortController();
+    briefAbort.current = ctrl;
+    const timeout = AbortSignal.timeout(BRIEF_TIMEOUT_MS);
+    timeout.addEventListener("abort", () => ctrl.abort(), { once: true });
+    setBriefState("loading");
+    setBriefError(undefined);
+    try {
+      const res = await fetch("/api/brief", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<Brief> & { error?: string };
+      if (!res.ok || typeof data.headline !== "string") throw new Error(data.error || `HTTP ${res.status}`);
+      const b = data as Brief;
+      setBrief(b);
+      saveBrief(b);
+      setBriefState("idle");
+    } catch (e) {
+      if (ctrl.signal.aborted && !timeout.aborted) return;
+      setBriefState("error");
+      setBriefError(errMsg(e) === "timeout" || timeout.aborted ? "brief timed out after 110s" : errMsg(e));
+    }
+  }, [viewSnapshot, visible, briefState, prefs.window, prefs.watchlist, country]);
+  const onGenerate = useCallback(() => void generateBrief(), [generateBrief]);
 
   /* ---------- keyboard shortcuts */
   useEffect(() => {
@@ -308,7 +487,7 @@ export default function Dashboard() {
         updatedAt={updatedAt}
         nextAt={nextAt}
         loading={loading}
-        shown={shown.length}
+        shown={visible.length}
         total={all.length}
         ok={health.ok}
         failed={health.failed}
@@ -316,10 +495,12 @@ export default function Dashboard() {
         search={search}
         searchRef={searchRef}
         view={prefs.view}
+        country={country}
         watchOnly={prefs.watchOnly}
         theme={prefs.theme}
         onSearch={setSearch}
         onView={setView}
+        onCountry={selectCountry}
         onWatchOnly={toggleWatchOnly}
         onTheme={toggleTheme}
         onRefresh={onRefresh}
@@ -330,21 +511,53 @@ export default function Dashboard() {
         {layoutKnown && (
           <>
             <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} />
-            <main className="main" aria-label="Headlines">
-              <LaneBoard
-                items={shown}
-                view={prefs.view}
-                lanes={prefs.lanes}
-                narrow={narrow}
-                loading={(loading || !firstDone) && all.length === 0}
-                failed={firstDone && !loading && all.length === 0 && batchErrors > 0}
-                matcher={matcher}
-                hits={hits}
-                savedIds={savedIds}
-                newIds={newIds}
-                now={now}
-                onStar={toggleSaved}
-              />
+            <main className="main" aria-label={prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : "Headlines"}>
+              {prefs.view === "globe" ? (
+                <div className="view-fill">
+                  {snapshot ? (
+                    <GlobeView points={snapshot.points} flows={snapshot.flows} items={itemMap} theme={prefs.theme} onSelectCountry={selectCountry} selected={country} />
+                  ) : (
+                    <div className="empty">loading</div>
+                  )}
+                </div>
+              ) : prefs.view === "graph" ? (
+                <div className="view-fill">
+                  {viewSnapshot ? (
+                    <GraphView nodes={graph.nodes} links={graph.links} items={itemMap} theme={prefs.theme} focus={graphFocus} onFocus={setGraphFocus} />
+                  ) : (
+                    <div className="empty">loading</div>
+                  )}
+                </div>
+              ) : prefs.view === "intel" ? (
+                <IntelPanel
+                  snapshot={viewSnapshot}
+                  brief={brief}
+                  briefState={briefState}
+                  briefError={briefError}
+                  onGenerate={onGenerate}
+                  onSearch={setSearch}
+                  items={itemMap}
+                  watchlist={prefs.watchlist}
+                  onAddWatch={addWatch}
+                  window={prefs.window}
+                  now={now}
+                />
+              ) : (
+                <LaneBoard
+                  items={visible}
+                  view={prefs.view}
+                  lanes={prefs.lanes}
+                  narrow={narrow}
+                  loading={(loading || !firstDone) && all.length === 0}
+                  failed={firstDone && !loading && all.length === 0 && batchErrors > 0}
+                  matcher={matcher}
+                  hits={hits}
+                  savedIds={savedIds}
+                  newIds={newIds}
+                  now={now}
+                  onStar={toggleSaved}
+                />
+              )}
             </main>
             <RightPanel
               watchlist={prefs.watchlist}

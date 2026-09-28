@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, type RefObject } from "react";
-import { countdown, fmtInt, useNow, utcClock, type Theme, type View } from "./util";
+import { countdown, fmtInt, useNow, utcClock, VIEWS, type Theme, type View } from "./util";
 
 export interface TopBarProps {
   updatedAt: number;
@@ -15,10 +15,13 @@ export interface TopBarProps {
   search: string;
   searchRef: RefObject<HTMLInputElement | null>;
   view: View;
+  /** ISO2 selected on the globe; null when no country filter is active. */
+  country: string | null;
   watchOnly: boolean;
   theme: Theme;
   onSearch: (s: string) => void;
   onView: (v: View) => void;
+  onCountry: (iso2: string | null) => void;
   onWatchOnly: () => void;
   onTheme: () => void;
   onRefresh: () => void;
@@ -69,9 +72,17 @@ function TopBarBase(p: TopBarProps) {
         onChange={(e) => p.onSearch(e.target.value)}
       />
       <div className="tb-right">
+        {p.country && (
+          <button type="button" className="chip country" onClick={() => p.onCountry(null)} title="Clear the country filter" aria-label={`Clear country filter ${p.country}`}>
+            country: <b>{p.country}</b> <span aria-hidden="true">{"×"}</span>
+          </button>
+        )}
         <div className="seg" role="group" aria-label="View">
-          <button type="button" className={p.view === "lanes" ? "on" : ""} aria-pressed={p.view === "lanes"} onClick={() => p.onView("lanes")} title="Lanes view (v)">Lanes</button>
-          <button type="button" className={p.view === "stream" ? "on" : ""} aria-pressed={p.view === "stream"} onClick={() => p.onView("stream")} title="Stream view (v)">Stream</button>
+          {VIEWS.map((v) => (
+            <button key={v.id} type="button" className={p.view === v.id ? "on" : ""} aria-pressed={p.view === v.id} onClick={() => p.onView(v.id)} title={`${v.label} view (v cycles)`}>
+              {v.label}
+            </button>
+          ))}
         </div>
         <button type="button" className="chip" aria-pressed={p.watchOnly} aria-label="Watchlist hits only (w)" onClick={p.onWatchOnly} title="Filter to watchlist hits only (w)">
           <span aria-hidden="true">{"★"}</span><span className="hide-sm"> hits only</span>

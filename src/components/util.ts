@@ -30,8 +30,25 @@ export interface Health {
   failedList: SourceStatus[];
 }
 
-export type View = "lanes" | "stream";
+export type View = "lanes" | "stream" | "globe" | "graph" | "intel";
+export const VIEWS: { id: View; label: string }[] = [
+  { id: "lanes", label: "Lanes" },
+  { id: "stream", label: "Stream" },
+  { id: "globe", label: "Globe" },
+  { id: "graph", label: "Graph" },
+  { id: "intel", label: "Intel" },
+];
 export type Theme = "dark" | "light";
+
+/** Minimal item the globe, graph and intel views resolve ids against. */
+export interface ViewItem {
+  id: string;
+  title: string;
+  source: string;
+  lane: LaneId;
+  ts: number;
+  link: string;
+}
 export type WindowId = "1h" | "6h" | "24h" | "48h" | "7d";
 
 export const WINDOWS: { id: WindowId; ms: number }[] = [
@@ -346,7 +363,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
   return {
     watchlist: sanitizeWatchlist(r.watchlist, d.watchlist),
     saved: sanitizeSaved(r.saved),
-    view: r.view === "stream" ? "stream" : "lanes",
+    view: VIEWS.some((v) => v.id === r.view) ? (r.view as View) : "lanes",
     window: WINDOWS.some((w) => w.id === r.window) ? (r.window as WindowId) : d.window,
     lanes: pickIds(r.lanes, LANE_IDS, d.lanes),
     regions: pickIds(r.regions, REGION_IDS, d.regions),

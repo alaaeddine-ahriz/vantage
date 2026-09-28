@@ -244,3 +244,16 @@ button.chip[aria-pressed="true"] { color: var(--accent); border-color: var(--acc
   .star, .plain { min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; }
   .seg button, .chip, .lrow, .filtersbtn, .form button, .btns button, .lanetabs button { min-height: 32px; }
 }
+
+/* ---------- intel views (globe, graph, intel) fill the main column */
+.view-fill { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.view-fill > .empty { margin: auto; }
+button.chip.country { color: var(--accent); border-color: var(--accent); }
+button.chip.country:hover { color: var(--text); }
+@media (max-width: 859px) {
+  .view-fill { min-height: 60dvh; overflow: visible; }
+  /* five view buttons may not fit beside the other controls: the group scrolls instead of wrapping the bar */
+  .tb-right { max-width: 100%; }
+  .seg { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .seg button { flex: none; }
+}

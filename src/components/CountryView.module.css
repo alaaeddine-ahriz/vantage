@@ -48,6 +48,7 @@
 .headNews { color: var(--accent); }
 .status { margin-top: 4px; font-size: 11px; }
 .warn { color: var(--down); }
+.retry { margin-left: 6px; font-size: 11px; color: var(--accent); text-decoration: underline; }
 .tabs { display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 2; }
 .tab { flex: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 7px 12px; font-size: 11.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
 .tab:hover { background: var(--panel-2); color: var(--text); }

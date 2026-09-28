@@ -134,6 +134,8 @@ export interface CountryData {
   missing: string[];
   mock?: boolean;
   sources: { wb: "ok" | "failed" | "skipped"; imf: "ok" | "failed" | "skipped" };
+  /** Why a source failed, per source: "timeout after 12s", "HTTP 403", "fetch failed (ENOTFOUND)". */
+  errors?: { wb?: string; imf?: string };
 }
 
 export interface ScreenerRow {

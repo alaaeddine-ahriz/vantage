@@ -2,6 +2,7 @@
 
 import { memo, useMemo, useState, type FormEvent } from "react";
 import type { NewsItem } from "@/lib/types";
+import Section from "./Section";
 import { exportCsv, exportMd, relativeTime, type Health } from "./util";
 
 /** Failed sources listed before the panel folds the rest behind a "+N more" button. */
@@ -13,6 +14,9 @@ export interface RightPanelProps {
   saved: NewsItem[];
   health: Health;
   now: number;
+  narrow: boolean;
+  collapsed: Set<string>;
+  onToggle: (id: string) => void;
   onAddWatch: (term: string) => void;
   onRemoveWatch: (term: string) => void;
   onSearchTerm: (term: string) => void;
@@ -37,11 +41,33 @@ function RightPanelBase(p: RightPanelProps) {
   const h = p.health;
   const failedShown = allFailed ? h.failedList : h.failedList.slice(0, FAILED_SHOWN);
   const failedHidden = h.failedList.length - failedShown.length;
+  const isOpen = (id: string) => !p.collapsed.has(id);
+  const hitsTotal = p.watchCounts.reduce((a, b) => a + b, 0);
+
+  if (p.collapsed.has("right")) {
+    const label = `${p.watchlist.length} terms · ${hitsTotal} hits · ${p.saved.length} saved · ${h.failed} failed`;
+    return (
+      <aside className={`right rail${p.narrow ? " flat" : ""}`} aria-label="Watchlist, saved items and source health (collapsed)">
+        <button type="button" className="plain railbtn" aria-expanded={false} onClick={() => p.onToggle("right")} title="Expand panel">
+          <span className="chev-h" aria-hidden="true">◂</span>
+          <span className="chev-v" aria-hidden="true">▴</span>
+          <span className="railtxt">{label}</span>
+        </button>
+      </aside>
+    );
+  }
 
   return (
     <aside className="right" aria-label="Watchlist, saved items and source health">
-      <section className="sec">
-        <div className="lbl">Watchlist <span className="cnt">{p.watchlist.length}</span></div>
+      <div className="panelhead">
+        <span className="lbl">Workspace</span>
+        <button type="button" className="plain" onClick={() => p.onToggle("right")} aria-expanded={true} title="Collapse panel" aria-label="Collapse panel">
+          <span className="chev-h" aria-hidden="true">▸</span>
+          <span className="chev-v" aria-hidden="true">▾</span>
+        </button>
+      </div>
+
+      <Section id="watchlist" title="Watchlist" count={p.watchlist.length} open={isOpen("watchlist")} onToggle={p.onToggle} summary={`${hitsTotal} hits in the current window`}>
         <form className="form" onSubmit={add}>
           <input type="text" value={term} placeholder="add term" aria-label="New watchlist term" onChange={(e) => setTerm(e.target.value)} />
           <button type="submit">Add</button>
@@ -59,10 +85,9 @@ function RightPanelBase(p: RightPanelProps) {
           })}
           {!p.watchlist.length && <li className="muted">no terms: add one above</li>}
         </ul>
-      </section>
+      </Section>
 
-      <section className="sec">
-        <div className="lbl">Saved <span className="cnt">{p.saved.length}</span></div>
+      <Section id="saved" title="Saved" count={p.saved.length} open={isOpen("saved")} onToggle={p.onToggle} summary={p.saved.length ? `${p.saved.length} starred` : "nothing starred"}>
         {p.saved.length ? (
           <>
             <div className="btns">
@@ -85,10 +110,9 @@ function RightPanelBase(p: RightPanelProps) {
         ) : (
           <p className="muted">star a headline to keep it here</p>
         )}
-      </section>
+      </Section>
 
-      <section className="sec">
-        <div className="lbl">Source health</div>
+      <Section id="health" title="Source health" open={isOpen("health")} onToggle={p.onToggle} summary={`${h.ok} ok · ${h.failed} failed`}>
         <div className="hrow">
           <span><span className="hdot ok" aria-hidden="true" /> {h.ok} ok</span>
           <span><span className="hdot bad" aria-hidden="true" /> {h.failed} failed</span>
@@ -109,7 +133,7 @@ function RightPanelBase(p: RightPanelProps) {
             {allFailed ? "show fewer" : `+${failedHidden} more`}
           </button>
         )}
-      </section>
+      </Section>
     </aside>
   );
 }

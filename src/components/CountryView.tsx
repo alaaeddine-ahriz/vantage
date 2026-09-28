@@ -221,7 +221,7 @@ interface Entry<T> { status: "loading" | "ok" | "error"; data?: T; error?: strin
  * Fetch-once store: a ref Map for the session, sessionStorage with a one hour TTL across reloads,
  * and a state record so components re-render when an entry lands.
  */
-function useStore<T>(url: (key: string) => string, storageKey: (key: string) => string, valid: (d: T) => boolean) {
+function useStore<T>(url: (key: string) => string, storageKey: (key: string) => string, valid: (d: T) => boolean, cacheable: (d: T) => boolean = () => true) {
   const cache = useRef(new Map<string, T>());
   const inflight = useRef(new Map<string, AbortController>());
   const mounted = useRef(true);
@@ -257,7 +257,8 @@ function useStore<T>(url: (key: string) => string, storageKey: (key: string) => 
         const data = (await res.json()) as T;
         if (!valid(data)) throw new Error("unexpected payload");
         cache.current.set(key, data);
-        writeSession(storageKey(key), data);
+        /* an answer with nothing in it is kept for this render only, so a retry or a reload asks the server again */
+        if (cacheable(data)) writeSession(storageKey(key), data);
         if (mounted.current) setEntries((e) => ({ ...e, [key]: { status: "ok", data } }));
       } catch (err) {
         /* an unmount abort is not an error to show; a timeout abort is */
@@ -268,7 +269,7 @@ function useStore<T>(url: (key: string) => string, storageKey: (key: string) => 
         if (inflight.current.get(key) === ctrl) inflight.current.delete(key);
       }
     },
-    [url, storageKey, valid],
+    [url, storageKey, valid, cacheable],
   );
   return { entries, load };
 }
@@ -276,6 +277,8 @@ function useStore<T>(url: (key: string) => string, storageKey: (key: string) => 
 const countryUrl = (iso2: string) => `/api/country/${iso2}`;
 const countryKey = (iso2: string) => `ww:country:${iso2}`;
 const validCountry = (d: CountryData) => !!d && typeof d === "object" && !!d.profile && !!d.series && typeof d.series === "object";
+/** Both sources down means the card is empty: not worth an hour in sessionStorage. */
+const cacheableCountry = (d: CountryData) => d.sources.wb === "ok" || d.sources.imf === "ok";
 const screenerUrl = (ind: string) => `/api/screener?ind=${encodeURIComponent(ind)}`;
 const screenerKey = (ind: string) => `ww:screener:${ind}`;
 const validScreener = (d: ScreenerData) => !!d && typeof d === "object" && Array.isArray(d.rows);
@@ -457,7 +460,7 @@ export default function CountryView(p: CountryViewProps) {
   const [chartId, setChartId] = useState<string | null>(null);
   const chartRef = useRef<HTMLDivElement | null>(null);
 
-  const countries = useStore<CountryData>(countryUrl, countryKey, validCountry);
+  const countries = useStore<CountryData>(countryUrl, countryKey, validCountry, cacheableCountry);
   const screener = useStore<ScreenerData>(screenerUrl, screenerKey, validScreener);
 
   const mentions = useMemo(() => mentionMap(snapshot), [snapshot]);
@@ -635,7 +638,15 @@ export default function CountryView(p: CountryViewProps) {
           <div className={`${css.status} muted`}>
             {status}
             {data && data.missing.length > 0 && <span> · {data.missing.length} of {INDICATORS.length} indicators missing</span>}
-            {failed.length > 0 && <span className={css.warn}> · {failed.map((f) => (f === "wb" ? "World Bank" : "IMF")).join(" and ")} unavailable</span>}
+            {failed.length > 0 && (
+              <span className={css.warn} title={failed.map((f) => `${f === "wb" ? "World Bank" : "IMF"}: ${data?.errors?.[f] ?? "failed"}`).join("\n")}>
+                {" "}· {failed.map((f) => `${f === "wb" ? "World Bank" : "IMF"}${data?.errors?.[f] ? ` (${data.errors[f]})` : ""}`).join(" and ")} unavailable
+              </span>
+            )}
+            {failed.length > 0 && entry?.status !== "loading" && (
+              <button type="button" className={`plain ${css.retry}`} onClick={() => void countries.load(selected, true)}>retry</button>
+            )}
+            {failed.length > 0 && entry?.status === "loading" && <span className="muted"> · retrying</span>}
           </div>
         )}
       </header>

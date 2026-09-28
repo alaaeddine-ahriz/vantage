@@ -192,6 +192,8 @@ async function main(): Promise<void> {
     const d = await loadCountry("FR");
     assert.equal(d.sources.wb, "failed");
     assert.equal(d.sources.imf, "ok");
+    assert.equal(d.errors?.wb, "network down");
+    assert.equal(d.errors?.imf, undefined);
     assert.ok(d.series.gdp_growth);
     assert.ok(d.series.pol_stability, "WGI call still parsed");
     assert.ok(!d.series.gdp);
@@ -207,6 +209,8 @@ async function main(): Promise<void> {
     stubFetch([]);
     const dead = await loadCountry("fr");
     assert.deepEqual(dead.sources, { wb: "failed", imf: "failed" });
+    assert.equal(dead.errors?.wb, "HTTP 404", "the World Bank reason is reported");
+    assert.equal(dead.errors?.imf, "HTTP 404", "the IMF reason is reported");
     assert.equal(dead.profile.name, "France", "gazetteer fallback");
     assert.equal(dead.profile.iso3, "FRA");
     assert.equal(typeof dead.profile.lat, "number");

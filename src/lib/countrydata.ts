@@ -20,7 +20,15 @@ import {
 
 const WB = "https://api.worldbank.org/v2";
 const IMF = "https://www.imf.org/external/datamapper/api/v1";
-const TIMEOUT_MS = 8000;
+/**
+ * Per request. Both APIs are slow on a cold call (the World Bank with twenty codes over thirty years,
+ * the IMF datamapper at any time), so this sits well above their usual latency and under the route's
+ * 30 s budget: every call runs in parallel and one retry still fits.
+ */
+const TIMEOUT_MS = 12_000;
+/** Retries on a network error, a timeout, 429 or a 5xx; 4xx answers are final. */
+const RETRIES = 1;
+const RETRY_DELAY_MS = 600;
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const WB_CHUNK = 20;
@@ -51,7 +59,34 @@ const AGGREGATES = new Set(
 
 // ------------------------------------------------------------------ fetch
 
-export async function fetchJson(url: string, revalidateSec: number): Promise<unknown> {
+class HttpError extends Error {
+  constructor(public status: number) {
+    super(`HTTP ${status}`);
+    this.name = "HttpError";
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** True for failures worth one more attempt: timeouts, DNS or socket errors, rate limiting and server errors. */
+function retryable(err: unknown): boolean {
+  if (err instanceof HttpError) return err.status === 429 || err.status >= 500;
+  return true;
+}
+
+/** Short, user-facing reason for a failed call: "timeout after 12s", "HTTP 403", "fetch failed (ENOTFOUND)". */
+export function describeError(err: unknown): string {
+  if (err instanceof HttpError) return err.message;
+  if (err instanceof Error) {
+    if (err.name === "AbortError" || err.name === "TimeoutError") return `timeout after ${Math.round(TIMEOUT_MS / 1000)}s`;
+    const cause = (err as Error & { cause?: unknown }).cause;
+    const code = cause && typeof cause === "object" && "code" in cause ? String((cause as { code: unknown }).code) : "";
+    return code ? `${err.message} (${code})` : err.message || err.name;
+  }
+  return "request failed";
+}
+
+async function fetchOnce(url: string, revalidateSec: number): Promise<unknown> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
@@ -61,10 +96,21 @@ export async function fetchJson(url: string, revalidateSec: number): Promise<unk
       redirect: "follow",
       next: { revalidate: revalidateSec },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new HttpError(res.status);
     return (await res.json()) as unknown;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function fetchJson(url: string, revalidateSec: number): Promise<unknown> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchOnce(url, revalidateSec);
+    } catch (err) {
+      if (attempt >= RETRIES || !retryable(err)) throw err;
+      await sleep(RETRY_DELAY_MS);
+    }
   }
 }
 
@@ -354,18 +400,21 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
     }
   }
 
-  // World Bank country series
+  // World Bank country series; the first failure's reason is reported so the card can say why
   const wbPoints = new Map<string, SeriesPoint[]>();
   let wbFailed = false;
+  let wbError: string | undefined;
   batchRes.forEach((r) => {
     if (r.status !== "fulfilled") {
       wbFailed = true;
+      wbError ??= describeError(r.reason);
       return;
     }
     try {
       for (const [code, pts] of parseWbIndicators(r.value)) wbPoints.set(code, pts);
-    } catch {
+    } catch (err) {
       wbFailed = true;
+      wbError ??= describeError(err);
     }
   });
 
@@ -386,9 +435,13 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
   // IMF
   let imfPointsByCode = new Map<string, SeriesPoint[]>();
   let imfFailed = imfRes.status !== "fulfilled";
+  let imfError: string | undefined = imfRes.status === "rejected" ? describeError(imfRes.reason) : undefined;
   if (imfRes.status === "fulfilled") {
     imfPointsByCode = parseImf(imfRes.value, iso3, currentYear);
-    if (!isRecord(imfRes.value) || !isRecord(imfRes.value.values)) imfFailed = true;
+    if (!isRecord(imfRes.value) || !isRecord(imfRes.value.values)) {
+      imfFailed = true;
+      imfError = "unexpected response shape";
+    }
   }
 
   const series: Record<string, IndicatorSeries> = {};
@@ -408,6 +461,7 @@ export async function loadCountry(iso2Raw: string): Promise<CountryData> {
     series,
     missing,
     sources: { wb: wbFailed ? "failed" : "ok", imf: imfFailed ? "failed" : "ok" },
+    ...(wbError || imfError ? { errors: { ...(wbError ? { wb: wbError } : {}), ...(imfError ? { imf: imfError } : {}) } } : {}),
   };
 }
 

@@ -26,7 +26,8 @@ const UA =
 const WB_CHUNK = 20;
 const COUNTRY_START = 1995;
 const WORLD_START = 2015;
-const END_YEAR = 2026;
+/** Upper bound of the World Bank date range; one year ahead so a freshly published year is never cut off. */
+const END_YEAR = new Date().getUTCFullYear() + 1;
 export const REVALIDATE_COUNTRY = 86_400;
 export const REVALIDATE_COUNTRY_LIST = 86_400;
 export const REVALIDATE_SCREENER = 21_600;

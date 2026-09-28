@@ -403,7 +403,8 @@ export default function Dashboard() {
   /* the country card: the globe sheet opens it, and its News button returns to the lanes with the country filter kept */
   const openCard = useCallback((iso2: string) => {
     setCountry(iso2.toUpperCase());
-    setPrefs((p) => ({ ...p, view: "countries" }));
+    /* the card opens on its overview even when the screener or compare tab was left open last time */
+    setPrefs((p) => ({ ...p, view: "countries", countryTab: "overview" }));
   }, []);
   const showCountryNews = useCallback((iso2: string) => {
     setCountry(iso2.toUpperCase());

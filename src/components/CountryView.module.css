@@ -112,7 +112,7 @@
 
 /* ---------- compare */
 .compare { display: flex; flex-direction: column; gap: 12px; }
-.cmpTable th.thLeft { display: flex; justify-content: space-between; gap: 6px; }
+.cmpCorner { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .cmpHead { min-width: 110px; }
 .cmpKey { display: inline-block; width: 10px; height: 3px; margin-right: 6px; vertical-align: middle; border-radius: 1px; }
 .cmpName { border: 0; padding: 0; font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--text); }
@@ -165,4 +165,7 @@
   .tab, .hbtn, .topBtn, .chips .chip, .filters .chip { min-height: 32px; }
   .table td { padding: 6px 8px; }
   .emptyCard { padding: 24px 12px; }
+  /* the region column is filtered by the chips above, so the value and change columns keep the phone width */
+  .thRegion, .tdRegion { display: none; }
+  .thBar, .tdBar { width: 56px; min-width: 44px; }
 }

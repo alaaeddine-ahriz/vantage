@@ -67,14 +67,16 @@ const TOP_CHIPS = 24;
 
 /* ------------------------------------------------------------------ formatting */
 
-function formatUsd(v: number): string {
+/** Abbreviated dollars; `fine` adds a decimal under 10 so neighbouring axis ticks stay distinct. */
+function formatUsd(v: number, fine = false): string {
   const a = Math.abs(v);
   const sign = v < 0 ? "-" : "";
   const units: [number, string][] = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "k"]];
   for (const [d, u] of units) {
     if (a >= d) {
       const n = a / d;
-      return `${sign}$${n >= 100 ? n.toFixed(0) : n.toFixed(1)}${u}`;
+      const digits = n >= 100 ? 0 : fine && n < 10 ? 2 : 1;
+      return `${sign}$${n.toFixed(digits)}${u}`;
     }
   }
   return `${sign}$${a.toFixed(0)}`;
@@ -86,7 +88,7 @@ export function formatValue(v: number | null | undefined, fmt: IndicatorDef["fmt
   switch (fmt) {
     case "pct": return `${v.toFixed(1)}%`;
     case "usd": return formatUsd(v);
-    case "idx": return v.toFixed(2);
+    case "idx": return v !== 0 && Math.abs(v) < 0.01 ? v.toFixed(3) : v.toFixed(2);
     default: return v.toLocaleString("en-US", { maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 1 });
   }
 }
@@ -95,6 +97,7 @@ export function formatValue(v: number | null | undefined, fmt: IndicatorDef["fmt
 export function formatTick(v: number, fmt: IndicatorDef["fmt"]): string {
   if (fmt === "pct") return `${Number(v.toFixed(1))}%`;
   if (fmt === "idx") return String(Number(v.toFixed(2)));
+  if (fmt === "usd") return Number.isFinite(v) ? formatUsd(v, true) : "n/a";
   return formatValue(v, fmt);
 }
 
@@ -111,18 +114,24 @@ export function formatDelta(cur: number | undefined, prev: number | undefined, f
   if (cur === undefined || prev === undefined || !Number.isFinite(cur) || !Number.isFinite(prev)) return null;
   let d: number;
   let text: string;
+  let digits: number;
   if (fmt === "usd" || fmt === "num") {
     if (!prev) return null;
     d = ((cur - prev) / Math.abs(prev)) * 100;
-    text = `${Math.abs(d).toFixed(1)}%`;
+    digits = 1;
+    text = `${Math.abs(d).toFixed(digits)}%`;
   } else if (fmt === "pct") {
     d = cur - prev;
-    text = `${Math.abs(d).toFixed(1)} pp`;
+    digits = 1;
+    text = `${Math.abs(d).toFixed(digits)} pp`;
   } else {
     d = cur - prev;
-    text = Math.abs(d).toFixed(2);
+    digits = 2;
+    text = Math.abs(d).toFixed(digits);
   }
-  const dir: Delta["dir"] = d > 0.0001 ? "up" : d < -0.0001 ? "down" : "flat";
+  /* the direction follows the rounded text, so a move that prints as 0.0 is flat rather than "-0.0" */
+  const rounded = Number(d.toFixed(digits));
+  const dir: Delta["dir"] = rounded > 0 ? "up" : rounded < 0 ? "down" : "flat";
   const sign = dir === "up" ? "+" : dir === "down" ? "-" : "";
   const good: Delta["good"] = better === "none" || dir === "flat" ? "flat" : better === "up" ? dir : dir === "up" ? "down" : "up";
   return { text: `${sign}${text}`, dir, good };
@@ -214,8 +223,19 @@ interface Entry<T> { status: "loading" | "ok" | "error"; data?: T; error?: strin
  */
 function useStore<T>(url: (key: string) => string, storageKey: (key: string) => string, valid: (d: T) => boolean) {
   const cache = useRef(new Map<string, T>());
-  const inflight = useRef(new Set<string>());
+  const inflight = useRef(new Map<string, AbortController>());
+  const mounted = useRef(true);
   const [entries, setEntries] = useState<Record<string, Entry<T>>>({});
+  /* every in-flight request is aborted when the view unmounts, so nothing lands on a dead component */
+  useEffect(() => {
+    mounted.current = true;
+    const pending = inflight.current;
+    return () => {
+      mounted.current = false;
+      for (const ctrl of pending.values()) ctrl.abort();
+      pending.clear();
+    };
+  }, []);
   const load = useCallback(
     async (key: string, force = false) => {
       if (!force) {
@@ -227,20 +247,25 @@ function useStore<T>(url: (key: string) => string, storageKey: (key: string) => 
         }
       }
       if (inflight.current.has(key)) return;
-      inflight.current.add(key);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(new DOMException("timeout", "TimeoutError")), FETCH_MS);
+      inflight.current.set(key, ctrl);
       setEntries((e) => ({ ...e, [key]: { status: "loading", data: e[key]?.data } }));
       try {
-        const res = await fetch(url(key), { cache: "no-store", signal: AbortSignal.timeout(FETCH_MS) });
+        const res = await fetch(url(key), { cache: "no-store", signal: ctrl.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as T;
         if (!valid(data)) throw new Error("unexpected payload");
         cache.current.set(key, data);
         writeSession(storageKey(key), data);
-        setEntries((e) => ({ ...e, [key]: { status: "ok", data } }));
+        if (mounted.current) setEntries((e) => ({ ...e, [key]: { status: "ok", data } }));
       } catch (err) {
-        setEntries((e) => ({ ...e, [key]: { status: "error", data: e[key]?.data, error: errMsg(err) } }));
+        /* an unmount abort is not an error to show; a timeout abort is */
+        const unmountAbort = ctrl.signal.aborted && !(ctrl.signal.reason instanceof DOMException && ctrl.signal.reason.name === "TimeoutError");
+        if (mounted.current && !unmountAbort) setEntries((e) => ({ ...e, [key]: { status: "error", data: e[key]?.data, error: errMsg(err) } }));
       } finally {
-        inflight.current.delete(key);
+        clearTimeout(timer);
+        if (inflight.current.get(key) === ctrl) inflight.current.delete(key);
       }
     },
     [url, storageKey, valid],
@@ -330,8 +355,11 @@ export function KpiTile({ def, series, active, onOpen }: KpiTileProps) {
   const latest = latestOf(series);
   const prev = prevOf(series);
   const delta = formatDelta(latest?.value, prev?.value, def.fmt, def.better);
+  const aria = latest
+    ? `${def.label}: ${formatValue(latest.value, def.fmt)} in ${latest.year}${latest.est ? ", estimate" : ""}${delta ? `, ${delta.text} vs previous` : ""}; open chart`
+    : `${def.label}: no data; open chart`;
   return (
-    <button type="button" className={`${css.tile} ${active ? css.tileOn : ""}`} onClick={() => onOpen?.(def.id)} title={`${def.label} (${def.unit}); click for the full chart`} aria-pressed={!!active}>
+    <button type="button" className={`${css.tile} ${active ? css.tileOn : ""}`} onClick={() => onOpen?.(def.id)} title={`${def.label} (${def.unit}); click for the full chart`} aria-label={aria} aria-pressed={!!active}>
       <span className={css.tileLabel}>{def.short}</span>
       <span className={css.tileValue}>
         {latest ? formatValue(latest.value, def.fmt) : <span className={css.na}>n/a</span>}
@@ -380,7 +408,12 @@ function ChartPanel({ def, primary, others, colorFor, onClose, title = true }: C
   push(primary);
   for (const o of others) if (o.iso2 !== primary.iso2) push(o);
   const world = primary.data?.series[def.id]?.world;
-  const refLines: RefLine[] = world !== undefined ? [{ value: world, label: `world ${formatValue(world, def.fmt)}` }] : [];
+  /* a world total (GDP, population) dwarfs any single country and would flatten the lines, so it stays a note rather than a level */
+  let maxAbs = 0;
+  for (const s of series) for (const pt of s.points) if (Number.isFinite(pt.value) && Math.abs(pt.value) > maxAbs) maxAbs = Math.abs(pt.value);
+  const worldText = world !== undefined ? `world ${formatValue(world, def.fmt)}` : "";
+  const worldAsNote = world !== undefined && (def.fmt === "usd" || def.fmt === "num") && Math.abs(world) > 4 * maxAbs;
+  const refLines: RefLine[] = world !== undefined && !worldAsNote ? [{ value: world, label: worldText }] : [];
   const pending = others.filter((o) => o.iso2 !== primary.iso2 && !o.data).map((o) => o.iso2);
   return (
     <div className={css.chart}>
@@ -389,6 +422,7 @@ function ChartPanel({ def, primary, others, colorFor, onClose, title = true }: C
           <span className={css.chartTitle}>{def.label}</span>
           <span className={css.chartUnit}>{def.unit}</span>
           <span className={css.spacer} />
+          {worldAsNote && <span className={`${css.chartNote} mono`}>{worldText}</span>}
           {pending.length > 0 && <span className={css.chartNote}>loading {pending.join(", ")}</span>}
           {onClose && (
             <button type="button" className="plain" onClick={onClose} aria-label="close chart">x</button>
@@ -812,8 +846,10 @@ function CompareTab({ selected, compare, sourceOf, entries, colorFor, onRemove, 
           <thead>
             <tr>
               <th className={css.thLeft}>
-                <span>Indicator</span>
-                {compare.length > 0 && <button type="button" className={css.linkBtn} onClick={onClear}>clear</button>}
+                <span className={css.cmpCorner}>
+                  <span>Indicator</span>
+                  {compare.length > 0 && <button type="button" className={css.linkBtn} onClick={onClear}>clear</button>}
+                </span>
               </th>
               {cols.map((c) => {
                 const e = entries[c.iso2];
@@ -847,7 +883,7 @@ function CompareTab({ selected, compare, sourceOf, entries, colorFor, onRemove, 
                 }
               }
               return (
-                <tr key={id} className={`${css.row} ${ind === id ? css.rowOn : ""}`} onClick={() => setInd(id)}>
+                <tr key={id} className={`${css.row} ${ind === id ? css.rowOn : ""}`} onClick={() => setInd(id)} tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setInd(id); } }} aria-label={`${d.label}, chart below`} aria-current={ind === id ? "true" : undefined}>
                   <td className={css.thLeft}>
                     <span className={css.rowLabel}>{d.short}</span>
                     <span className={css.rowUnit}>{d.unit}</span>
@@ -985,7 +1021,7 @@ function ScreenerTab({ store, mentions, onPick, selected }: ScreenerTabProps) {
               <tr>
                 <th className="mono">#</th>
                 <th className={css.thLeft}>Country</th>
-                <th className={css.thLeft}>Region</th>
+                <th className={`${css.thLeft} ${css.thRegion}`}>Region</th>
                 <th>
                   <button type="button" className={css.sortBtn} onClick={() => toggleSort("value")} aria-sort={sort.key === "value" ? (sort.desc ? "descending" : "ascending") : "none"}>
                     {def.short}{arrow("value")}

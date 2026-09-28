@@ -257,3 +257,10 @@ button.chip.country:hover { color: var(--text); }
   .seg { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .seg button { flex: none; }
 }
+
+/* Six views plus the country chip: keep the top bar on one line at common desktop widths. */
+@media (min-width: 860px) and (max-width: 1799px) {
+  .brand small { display: none; }
+  .search { flex: 1 1 140px; max-width: 260px; }
+  .topbar .seg button { padding-left: 8px; padding-right: 8px; }
+}

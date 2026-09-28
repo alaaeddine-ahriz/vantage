@@ -13,7 +13,7 @@
 .dotSolo { fill: currentColor; }
 .hair { stroke: var(--muted); stroke-width: 1; }
 .marker { fill: currentColor; stroke: var(--bg); stroke-width: 2; pointer-events: none; }
-.tip { position: absolute; top: 8px; z-index: 2; pointer-events: none; min-width: 120px; padding: 5px 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--border); border-radius: 3px; font-size: 11px; line-height: 1.4; }
+.tip { position: absolute; top: 8px; z-index: 2; pointer-events: none; min-width: 120px; max-width: calc(50% - 12px); overflow: hidden; padding: 5px 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--border); border-radius: 3px; font-size: 11px; line-height: 1.4; }
 .tipYear { font-family: var(--mono); color: var(--muted); font-size: 10px; margin-bottom: 2px; }
 .tipRow { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .tipRow b { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }

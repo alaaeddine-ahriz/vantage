@@ -204,7 +204,8 @@ export default function LineChart({
         .map((s) => ({ s, p: s.points.find((p) => p.year === hover) }))
         .filter((r): r is { s: ChartSeries; p: SeriesPoint } => !!r.p);
   const tipLeft = hover === null ? 0 : x(hover);
-  const tipRight = tipLeft > L.left + plotW * 0.6;
+  /* the tooltip flips to the left of the crosshair past the middle, so it never leaves the chart box */
+  const tipRight = tipLeft > L.left + plotW * 0.5;
   const single = series.length === 1;
 
   return (

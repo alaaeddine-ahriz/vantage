@@ -127,7 +127,9 @@ export function userContent(req: BriefRequest, now: number): string {
 
 // ------------------------------------------------------------------ schema
 
-const idList = { type: "array", items: { type: "string" }, maxItems: 12 } as const;
+/* Structured outputs accept only a subset of JSON Schema: no maxItems, minItems, minimum or maximum.
+   Size limits live in the descriptions and are enforced again in normalizeBrief. */
+const idList = { type: "array", items: { type: "string" }, description: "Up to 12 item ids from the request." } as const;
 
 /** Mirrors intel-types.Brief minus the server-filled fields (generatedAt, model, mock, error). */
 export const BRIEF_SCHEMA = {
@@ -139,7 +141,7 @@ export const BRIEF_SCHEMA = {
     recap: { type: "string", description: "Markdown: 4 to 8 bullets starting with '- ', bold allowed, nothing else." },
     lanes: {
       type: "array",
-      maxItems: 6,
+      description: "One entry per lane present, at most 6.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -153,7 +155,7 @@ export const BRIEF_SCHEMA = {
     },
     patterns: {
       type: "array",
-      maxItems: 8,
+      description: "At most 8 patterns, most notable first.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -161,14 +163,14 @@ export const BRIEF_SCHEMA = {
         properties: {
           title: { type: "string" },
           detail: { type: "string" },
-          confidence: { type: "number", minimum: 0, maximum: 1 },
+          confidence: { type: "number", description: "Between 0 and 1." },
           itemIds: idList,
         },
       },
     },
     links: {
       type: "array",
-      maxItems: 16,
+      description: "At most 16 typed links between entities or events.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -182,7 +184,7 @@ export const BRIEF_SCHEMA = {
         },
       },
     },
-    watch: { type: "array", maxItems: 8, items: { type: "string" } },
+    watch: { type: "array", description: "Up to 8 suggested watch terms.", items: { type: "string" } },
   },
 } as const;
 

@@ -167,3 +167,19 @@ test("normalizeBrief drops unknown ids and bad entries, keeps the shape", () => 
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;
+
+// Structured outputs reject JSON Schema size and range keywords; keep them out of the schema for good.
+{
+  const banned = new Set(["maxItems", "minItems", "minimum", "maximum", "maxLength", "minLength", "pattern", "format"]);
+  const walk = (node: unknown, path: string): void => {
+    if (!node || typeof node !== "object") return;
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      assert.ok(!banned.has(k), `unsupported schema keyword "${k}" at ${path}`);
+      if (k === "properties" && v && typeof v === "object") {
+        for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) walk(pv, `${path}.${pk}`);
+      } else if (k === "items") walk(v, `${path}[]`);
+    }
+  };
+  walk(BRIEF_SCHEMA, "root");
+  console.log("ok - schema uses only keywords structured outputs accept");
+}

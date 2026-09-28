@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns="http://purl.org/rss/1.0/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel rdf:about="https://rss.dw.com/rdf/rss-en-bus">
+    <title>Deutsche Welle: DW.COM Business</title>
+    <link>https://www.dw.com/en/business/s-1431</link>
+    <description>Business news from DW</description>
+    <dc:language>en</dc:language>
+    <dc:publisher>Deutsche Welle</dc:publisher>
+    <items>
+      <rdf:Seq>
+        <rdf:li rdf:resource="https://www.dw.com/en/thyssenkrupp-steel-to-cut-11000-jobs/a-71234501"/>
+        <rdf:li rdf:resource="https://www.dw.com/en/german-power-prices-spike-during-wind-lull/a-71234388"/>
+        <rdf:li rdf:resource="https://www.dw.com/en/euro-zone-manufacturing-pmi-back-in-growth/a-71233902"/>
+      </rdf:Seq>
+    </items>
+  </channel>
+
+  <item rdf:about="https://www.dw.com/en/thyssenkrupp-steel-to-cut-11000-jobs/a-71234501">
+    <title>Thyssenkrupp Steel to cut 11,000 jobs and close Kreuztal plant</title>
+    <link>https://www.dw.com/en/thyssenkrupp-steel-to-cut-11000-jobs/a-71234501</link>
+    <description>Germany's largest steelmaker will shrink capacity to 8.7 million tonnes as it seeks a joint venture with EPH.</description>
+    <dc:date>2026-09-28T06:45:00Z</dc:date>
+    <dc:creator>DW</dc:creator>
+  </item>
+
+  <item rdf:about="https://www.dw.com/en/german-power-prices-spike-during-wind-lull/a-71234388">
+    <title>German power prices spike to EUR 320/MWh during evening wind lull</title>
+    <link>https://www.dw.com/en/german-power-prices-spike-during-wind-lull/a-71234388</link>
+    <description>Dunkelflaute conditions across northern Europe forced gas plants to set the marginal price.</description>
+    <dc:date>2026-09-27T05:00:00Z</dc:date>
+    <dc:creator>DW</dc:creator>
+  </item>
+
+  <item rdf:about="https://www.dw.com/en/euro-zone-manufacturing-pmi-back-in-growth/a-71233902">
+    <title>Euro zone manufacturing PMI rises to 50.7, first expansion since 2022</title>
+    <link>https://www.dw.com/en/euro-zone-manufacturing-pmi-back-in-growth/a-71233902</link>
+    <description>New orders grew in Germany for the second month, though Italy and France remained below 50.</description>
+    <dc:date>2026-09-25T09:30:00Z</dc:date>
+    <dc:creator>DW</dc:creator>
+  </item>
+</rdf:RDF>

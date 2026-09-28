@@ -7,11 +7,11 @@ import type { LaneId, Source } from "./types";
  */
 const RULES: Record<LaneId, RegExp> = {
   oilgas:
-    /\b(oil|crude|brent|wti|opec\+?|petrol(?:eum|ier|iere|iers|ieres)?|petrole|gasoline|natural gas|gaz naturel|gaz|lng|gnl|refiner(?:y|ies)|raffin\w+|upstream|downstream|midstream|offshore|drilling|forage|shale|schiste|pipeline|gazoduc|oleoduc|barrels?|barils?|exxon(?:mobil)?|chevron|shell|bp|totalenergies|aramco|adnoc|eni|equinor|petrobras|gazprom|rosneft|lukoil|qatarenergy|henry hub|ttf|fracking|rig count|condensate|diesel|jet fuel|kerosene|fioul|naphtha|fpso|petrochemical|e&p)\b/i,
+    /\b(oil|crude|brent|wti|opec\+?|petrol(?:eum|ier|iere|iers|ieres)?|petrole|gasoline|natural gas|gaz naturel|gaz|lng|gnl|refiner(?:y|ies)|raffin\w+|upstream|downstream|midstream|offshore(?!\s+wind)|drilling|forage|shale|schiste|pipeline|gazoduc|oleoduc|barrels?|barils?|exxon(?:mobil)?|chevron|shell|bp|totalenergies|aramco|adnoc|eni|equinor|petrobras|gazprom|rosneft|lukoil|qatarenergy|henry hub|ttf|fracking|rig count|condensate|diesel|jet fuel|kerosene|fioul|naphtha|fpso|petrochemical|e&p)\b/i,
   power:
-    /\b(electricit[ye]|power (?:grid|plant|plants|price|prices|market|outage|outages|generation|demand|supply|station|sector|cut|cuts)|grid|reseau electrique|utility|utilities|nuclear|nucleaire|reactors?|reacteurs?|edf|engie|enel|iberdrola|rwe|e\.on|vattenfall|orsted|national grid|rte|enedis|transmission|substation|blackouts?|coupures? (?:de courant|d'electricite)|centrale|centrales|smr|uranium|coal|charbon|gas-fired|ccgt|capacity market|interconnector|epex|entso-e|ferc|nerc|ercot|pjm|kwh|mwh|gwh|twh|data cent(?:er|re)s?|hydropower|dam)\b/i,
+    /\b(electricit[ye]|power (?:grid|plant|plants|price|prices|market|outage|outages|generation|demand|supply|station|sector|cut|cuts)|grid|reseau electrique|utility|utilities|nuclear|nucleaire|reactors?|reacteurs?|edf|engie|enel|iberdrola|rwe|e\.on|vattenfall|national grid|rte|enedis|transmission|substation|blackouts?|coupures? (?:de courant|d'electricite)|centrale|centrales|smr|uranium|coal|charbon|gas-fired|ccgt|capacity market|interconnector|epex|entso-e|ferc|nerc|ercot|pjm|kwh|mwh|gwh|twh|data cent(?:er|re)s?|hydropower|dam)\b/i,
   renewables:
-    /\b(renewables?|renouvelables?|solar|solaire|photovolta\w+|wind (?:farm|farms|power|turbine|turbines|energy)|eolien\w*|offshore wind|hydrogen|hydrogene|electrolys\w+|batter(?:y|ies|ie)|storage|stockage|evs?|electric vehicles?|vehicules? electriques?|charging|net[- ]zero|decarboni[sz]\w+|carbon (?:capture|credits?|price|prices|market|tax|border)|cbam|ccs|ccus|emissions?|climate|climat\w*|ets|eua|biofuels?|biocarburants?|biomethane|geothermal|geothermi\w*|hydroelectric|heat pumps?|pompes? a chaleur|energy transition|transition energetique|clean energy|cop\d{2}|ppa|green (?:energy|hydrogen|steel|deal)|sustainab\w+|nuclear fusion|fusion nucleaire)\b/i,
+    /\b(renewables?|renouvelables?|solar|solaire|photovolta\w+|wind (?:farm|farms|power|turbine|turbines|energy)|eolien\w*|offshore wind|orsted|hydrogen|hydrogene|electrolys\w+|batter(?:y|ies|ie)|storage|stockage|evs?|electric vehicles?|vehicules? electriques?|charging|net[- ]zero|decarboni[sz]\w+|carbon (?:capture|credits?|price|prices|market|tax|border)|cbam|ccs|ccus|emissions?|climate|climat\w*|ets|eua|biofuels?|biocarburants?|biomethane|geothermal|geothermi\w*|hydroelectric|heat pumps?|pompes? a chaleur|energy transition|transition energetique|clean energy|cop\d{2}|ppa|green (?:energy|hydrogen|steel|deal)|sustainab\w+|nuclear fusion|fusion nucleaire)\b/i,
   industry:
     /\b(manufactur\w+|industri\w+|usines?|factor(?:y|ies)|steel|acier|aluminium|aluminum|copper|cuivre|nickel|lithium|cobalt|rare earths?|terres rares|mining|mines?|minier\w*|metals?|metaux|chemicals?|chimi\w+|petrochimi\w+|cement|ciment|automotive|automobile|carmakers?|constructeurs? automobiles?|aerospace|aeronautique|airbus|boeing|safran|thales|siemens|schneider|abb|arcelormittal|thyssenkrupp|basf|dow|rio tinto|bhp|glencore|vale|freeport|shipping|maritime|containers?|ports?|supply chains?|chaines? d'approvisionnement|logistics|logistique|semiconductors?|semi-conducteurs?|chips?|robot\w*|machinery|equipment|pmi|industrial production|production industrielle|reshoring|nearshoring|shipyards?|chantiers? navals?|defen[cs]e industry|arms|defense|smelters?|fonderies?|alumina|iron ore|minerai)\b/i,
   policy:
@@ -30,7 +30,15 @@ export const LANE_ORDER: LaneId[] = [
 ];
 
 export function fold(text: string): string {
-  return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/ø/g, "o")
+    .replace(/æ/g, "ae")
+    .replace(/œ/g, "oe")
+    .replace(/ß/g, "ss")
+    .replace(/ł/g, "l");
 }
 
 function countMatches(re: RegExp, text: string): number {

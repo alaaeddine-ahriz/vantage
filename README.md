@@ -69,7 +69,7 @@ npm run build
 
 Import the repository; no environment variables are needed for feeds, quotes, globe, graph, local patterns and country data. Add `ANTHROPIC_API_KEY` (Project Settings, Environment Variables) if you want the AI brief.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/alaaeddine-ahriz/world-watchout)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/alaaeddine-ahriz/vantage)
 
 How load is kept off the publishers:
 

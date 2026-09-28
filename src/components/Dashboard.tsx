@@ -379,6 +379,9 @@ export default function Dashboard() {
   );
   const toggleWatchOnly = useCallback(() => setPrefs((p) => ({ ...p, watchOnly: !p.watchOnly })), []);
   const toggleTheme = useCallback(() => setPrefs((p) => ({ ...p, theme: p.theme === "dark" ? "light" : "dark" })), []);
+  const togglePanel = useCallback((id: string) => setPrefs((p) => ({ ...p, collapsed: p.collapsed.includes(id) ? p.collapsed.filter((c) => c !== id) : [...p.collapsed, id] })), []);
+  const toggleTicker = useCallback(() => togglePanel("ticker"), [togglePanel]);
+  const collapsed = useMemo(() => new Set(prefs.collapsed), [prefs.collapsed]);
   const setView = useCallback((view: View) => setPrefs((p) => ({ ...p, view })), []);
   const toggleSaved = useCallback((it: Item) => {
     setPrefs((p) => {
@@ -526,12 +529,12 @@ export default function Dashboard() {
         onTheme={toggleTheme}
         onRefresh={onRefresh}
       />
-      <Ticker quotes={quotes} error={quotesError} />
+      <Ticker quotes={quotes} error={quotesError} open={!collapsed.has("ticker")} onToggle={toggleTicker} />
       {/* the composition below depends on the viewport, so it waits for the media query instead of repainting from desktop to phone */}
-      <div className="body">
+      <div className={`body${!narrow && collapsed.has("sidebar") ? " l-off" : ""}${!narrow && collapsed.has("right") ? " r-off" : ""}`}>
         {layoutKnown && (
           <>
-            <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} />
+            <Sidebar prefs={prefs} counts={counts} statusById={statusById} narrow={narrow} update={update} collapsed={collapsed} onToggle={togglePanel} />
             <main className="main" aria-label={prefs.view === "intel" ? "Intelligence" : prefs.view === "globe" ? "Globe" : prefs.view === "graph" ? "Graph" : prefs.view === "countries" ? "Countries" : "Headlines"}>
               {prefs.view === "globe" ? (
                 <div className="view-fill">
@@ -603,6 +606,9 @@ export default function Dashboard() {
               saved={prefs.saved}
               health={health}
               now={now}
+              narrow={narrow}
+              collapsed={collapsed}
+              onToggle={togglePanel}
               onAddWatch={addWatch}
               onRemoveWatch={removeWatch}
               onSearchTerm={setSearch}

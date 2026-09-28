@@ -4,31 +4,40 @@ import { memo } from "react";
 import type { Quote } from "@/lib/types";
 import { formatPct, formatPrice, QUOTE_GROUPS } from "./util";
 
+const SPARK_W = 42;
+const SPARK_H = 20;
+
+/** Up to six closes: a line plus a soft fill under it, so the shape reads at a glance. */
 function Spark({ series }: { series?: number[] }) {
-  const pts = (series ?? []).filter((v) => Number.isFinite(v)).slice(-5);
-  if (pts.length < 2) return null;
-  const w = 40;
-  const h = 14;
+  const pts = (series ?? []).filter((v) => Number.isFinite(v)).slice(-6);
+  if (pts.length < 2) return <span className="spark none" aria-hidden="true" />;
   const min = Math.min(...pts);
   const span = Math.max(...pts) - min || 1;
-  const d = pts
-    .map((v, i) => `${((i / (pts.length - 1)) * w).toFixed(1)},${(h - 1 - ((v - min) / span) * (h - 2)).toFixed(1)}`)
-    .join(" ");
+  const x = (i: number) => ((i / (pts.length - 1)) * (SPARK_W - 2) + 1).toFixed(1);
+  const y = (v: number) => (SPARK_H - 2 - ((v - min) / span) * (SPARK_H - 4)).toFixed(1);
+  const coords = pts.map((v, i) => `${x(i)},${y(v)}`);
+  const line = coords.join(" ");
+  const area = `M${x(0)},${SPARK_H - 1} L${coords.join(" L")} L${x(pts.length - 1)},${SPARK_H - 1} Z`;
   return (
-    <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
-      <polyline points={d} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    <svg className="spark" width={SPARK_W} height={SPARK_H} viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} aria-hidden="true">
+      <path d={area} fill="currentColor" opacity="0.14" />
+      <polyline points={line} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(pts.length - 1)} cy={y(pts[pts.length - 1])} r="1.6" fill="currentColor" />
     </svg>
   );
 }
 
-function Tile({ q }: { q: Quote }) {
-  const pct = q.changePct;
-  const dir = pct === null || !Number.isFinite(pct) || pct === 0 ? "flat" : pct > 0 ? "up" : "down";
+const dirOf = (pct: number | null) => (pct === null || !Number.isFinite(pct) || pct === 0 ? "flat" : pct > 0 ? "up" : "down");
+
+function Tile({ q, group }: { q: Quote; group?: string }) {
+  const dir = dirOf(q.changePct);
   /* unit already names the currency (USD/bbl, EUR/MWh); only bare instruments fall back to the provider currency. */
   const unit = q.unit ?? q.currency ?? "";
-  const title = [q.symbol, q.note ?? `provider: ${q.provider}`, q.time ? `as of ${q.time}` : ""].filter(Boolean).join(" | ");
+  const title = [q.label, unit, q.symbol, q.note ?? `provider: ${q.provider}`, q.time ? `as of ${q.time}` : ""].filter(Boolean).join(" | ");
   return (
-    <div className={`tile dir-${dir}`} title={title}>
+    <div className={`tile dir-${dir} g-${q.group}${group ? " lead" : ""}`} title={title}>
+      {/* the first tile of a group carries the group name as a vertical strip, so no cell is wasted on a label */}
+      {group && <span className="tg" aria-hidden="true">{group}</span>}
       <div className="tt">
         <div className="tl">
           <span className="tn">{q.label}</span>
@@ -36,7 +45,7 @@ function Tile({ q }: { q: Quote }) {
         </div>
         <div className="tv">
           <span className={`px${q.price === null ? " muted" : ""}`}>{formatPrice(q)}</span>
-          <span className="tp">{formatPct(pct)}</span>
+          <span className="tp">{formatPct(q.changePct)}</span>
         </div>
       </div>
       <Spark series={q.series} />
@@ -44,27 +53,62 @@ function Tile({ q }: { q: Quote }) {
   );
 }
 
-function TickerBase({ quotes, error }: { quotes: Quote[] | null; error: boolean }) {
-  if (!quotes) {
+export interface TickerProps {
+  quotes: Quote[] | null;
+  error: boolean;
+  open: boolean;
+  onToggle: () => void;
+}
+
+function TickerBase({ quotes, error, open, onToggle }: TickerProps) {
+  const groups = quotes ? QUOTE_GROUPS.map((g) => ({ ...g, qs: quotes.filter((q) => q.group === g.id) })).filter((g) => g.qs.length) : [];
+  const n = quotes?.length ?? 0;
+  const note = !quotes ? (error ? "markets unavailable" : "loading markets") : error ? "stale" : !n ? "no quotes" : "";
+  const toggle = (
+    <button
+      type="button"
+      className="plain tbtn"
+      aria-expanded={open}
+      aria-controls="ticker-body"
+      onClick={onToggle}
+      title={open ? "Collapse markets" : "Expand markets"}
+    >
+      <span className="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+      <span className="lbl">Markets</span>
+      {n > 0 && <span className="cnt">{n}</span>}
+      {note && <span className={`tnote${error ? " down" : ""}`} title={error ? "Last refresh of market data failed" : undefined}>{note}</span>}
+    </button>
+  );
+
+  if (!open) {
     return (
-      <div className="ticker" aria-label="Market quotes">
-        <div className="tile note muted">{error ? "markets unavailable" : "loading markets"}</div>
-        <div className="tfill" aria-hidden="true" />
+      <div className="ticker off" aria-label="Market quotes (collapsed)">
+        {toggle}
+        <div className="tmini" id="ticker-body">
+          {groups.map((g) => (
+            <span className="tmg" key={g.id}>
+              <span className="tglabel">{g.label}</span>
+              {g.qs.map((q) => {
+                const dir = dirOf(q.changePct);
+                return (
+                  <span className={`tq dir-${dir}`} key={q.id} title={`${q.label} ${q.unit ?? q.currency ?? ""}`.trim()}>
+                    {q.label} <b className="mono">{formatPrice(q)}</b> <span className="tp mono">{formatPct(q.changePct)}</span>
+                  </span>
+                );
+              })}
+            </span>
+          ))}
+        </div>
       </div>
     );
   }
-  const groups = QUOTE_GROUPS.map((g) => ({ ...g, qs: quotes.filter((q) => q.group === g.id) })).filter((g) => g.qs.length);
+
   return (
     <div className="ticker" aria-label="Market quotes">
-      {error && <div className="tile note muted" title="Last refresh of market data failed">markets stale</div>}
-      {groups.map((g) => (
-        <div className="tgroup" key={g.id} role="group" aria-label={g.label}>
-          <span className="tglabel lbl" aria-hidden="true">{g.label}</span>
-          {g.qs.map((q) => <Tile key={q.id} q={q} />)}
-        </div>
-      ))}
-      {!groups.length && <div className="tile note muted">no quotes</div>}
-      <div className="tfill" aria-hidden="true" />
+      {toggle}
+      <div className="tgrid" id="ticker-body">
+        {groups.map((g) => g.qs.map((q, i) => <Tile key={q.id} q={q} group={i === 0 ? g.label : undefined} />))}
+      </div>
     </div>
   );
 }

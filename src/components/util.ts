@@ -78,6 +78,8 @@ export interface Prefs {
   briefModel: string;
   /** Last tab opened on the country card. */
   countryTab?: string;
+  /** Ids of collapsed panels and sections (see PANEL_IDS); everything else is open. */
+  collapsed: string[];
 }
 
 export const DEFAULT_WATCHLIST = [
@@ -98,7 +100,16 @@ export const DEFAULT_PREFS: Prefs = {
   theme: "dark",
   compare: [],
   briefModel: "claude-opus-5",
+  collapsed: ["sources"],
 };
+
+/** Every panel or section that can be folded; unknown ids are dropped from stored prefs. */
+export const PANEL_IDS = [
+  "ticker", "sidebar", "right",
+  "window", "lanes", "regions", "langs", "sources",
+  "watchlist", "saved", "health",
+] as const;
+export type PanelId = (typeof PANEL_IDS)[number];
 
 export const REGION_CODE: Record<Region, string> = {
   global: "GL", europe: "EU", france: "FR", mena: "ME", asia: "AS", americas: "AM", africa: "AF",
@@ -396,6 +407,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
     theme: r.theme === "light" ? "light" : "dark",
     compare: sanitizeCompare(r.compare),
     briefModel: pickModel(r.briefModel),
+    collapsed: Array.from(new Set(pickIds(r.collapsed, PANEL_IDS, d.collapsed))),
     ...(typeof r.countryTab === "string" && r.countryTab ? { countryTab: r.countryTab } : {}),
   };
 }

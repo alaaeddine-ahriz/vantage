@@ -2,7 +2,15 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import type { SeriesPoint } from "@/lib/country-types";
-import css from "./LineChart.module.css";
+import { cn } from "@/lib/utils";
+
+/* ---------- utility class strings (the SVG maths below is untouched; only the styling moved to Tailwind) */
+const TICK = "fill-muted-foreground font-mono text-[10px] tabular-nums";
+const NOTE = "fill-muted-foreground text-[10px]";
+const LINE = "fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]";
+const LINE_REF = "fill-none stroke-current stroke-[1.5] [stroke-dasharray:3_3]";
+const KEY = "inline-block w-3 shrink-0 border-t-2 border-current";
+const KEY_REF = "inline-block w-3 shrink-0 border-t-2 border-dashed border-muted-foreground";
 
 /** One line on the chart. Colour follows the entity: the caller assigns it and keeps it stable. */
 export interface ChartSeries {
@@ -152,7 +160,7 @@ export default function LineChart({
     };
   }, [series, refLines, width, height, tick]);
 
-  if (!layout) return <div className={css.empty}>no data to chart</div>;
+  if (!layout) return <div className="p-5 text-center text-xs text-muted-foreground">no data to chart</div>;
 
   const L = layout;
   const plotW = Math.max(10, L.width - L.left - L.right);
@@ -209,9 +217,9 @@ export default function LineChart({
   const single = series.length === 1;
 
   return (
-    <div ref={box} className={css.wrap}>
+    <div ref={box} className="relative w-full min-w-0">
       <svg
-        className={css.svg}
+        className="block h-auto max-w-full overflow-visible outline-offset-2"
         width={L.width}
         height={L.height}
         viewBox={`0 0 ${L.width} ${L.height}`}
@@ -229,24 +237,24 @@ export default function LineChart({
         {/* recessive hairline grid and axis ticks */}
         {L.ticks.map((t) => (
           <g key={t}>
-            <line className={css.grid} x1={L.left} x2={L.left + plotW} y1={y(t)} y2={y(t)} />
-            <text className={css.tick} x={L.left - 6} y={y(t)} textAnchor="end" dominantBaseline="middle">
+            <line className="stroke-border" x1={L.left} x2={L.left + plotW} y1={y(t)} y2={y(t)} />
+            <text className={TICK} x={L.left - 6} y={y(t)} textAnchor="end" dominantBaseline="middle">
               {tick(t)}
             </text>
           </g>
         ))}
         {xTicks.map((yr) => (
-          <text key={yr} className={css.tick} x={x(yr)} y={L.height - 6} textAnchor="middle">
+          <text key={yr} className={TICK} x={x(yr)} y={L.height - 6} textAnchor="middle">
             {yr}
           </text>
         ))}
-        <line className={css.axis} x1={L.left} x2={L.left + plotW} y1={L.top + plotH} y2={L.top + plotH} />
+        <line className="stroke-border" x1={L.left} x2={L.left + plotW} y1={L.top + plotH} y2={L.top + plotH} />
 
         {/* forecast boundary */}
         {Number.isFinite(firstEst) && (
           <g>
-            <line className={css.grid} x1={x(firstEst)} x2={x(firstEst)} y1={L.top} y2={L.top + plotH} />
-            <text className={css.note} x={Math.min(x(firstEst) + 4, L.left + plotW - 60)} y={L.top + 2} dominantBaseline="hanging">
+            <line className="stroke-border" x1={x(firstEst)} x2={x(firstEst)} y1={L.top} y2={L.top + plotH} />
+            <text className={NOTE} x={Math.min(x(firstEst) + 4, L.left + plotW - 60)} y={L.top + 2} dominantBaseline="hanging">
               {forecastLabel}
             </text>
           </g>
@@ -255,8 +263,8 @@ export default function LineChart({
         {/* reference levels */}
         {refLines.map((r, i) => (
           <g key={`ref${i}`}>
-            <line className={css.ref} x1={L.left} x2={L.left + plotW} y1={y(r.value)} y2={y(r.value)} />
-            <text className={css.note} x={L.left + plotW} y={y(r.value) - 3} textAnchor="end">
+            <line className="stroke-muted-foreground opacity-80 [stroke-dasharray:3_3]" x1={L.left} x2={L.left + plotW} y1={y(r.value)} y2={y(r.value)} />
+            <text className={NOTE} x={L.left + plotW} y={y(r.value) - 3} textAnchor="end">
               {r.label}
             </text>
           </g>
@@ -270,10 +278,10 @@ export default function LineChart({
             const est = pts.filter((p) => p.est);
             const estPath = est.length ? [...(actual.length ? [actual[actual.length - 1]] : []), ...est] : [];
             return (
-              <g key={s.id} className={s.reference ? css.seriesRef : css.series} style={{ color: s.color }}>
-                {actual.length > 0 && <path d={pathFor(actual, x, y)} className={css.line} />}
-                {actual.length === 1 && est.length === 0 && <circle cx={x(actual[0].year)} cy={y(actual[0].value)} r={4} className={css.dotSolo} />}
-                {estPath.length > 1 && <path d={pathFor(estPath, x, y)} className={css.lineEst} />}
+              <g key={s.id} style={{ color: s.color }}>
+                {actual.length > 0 && <path d={pathFor(actual, x, y)} className={s.reference ? LINE_REF : LINE} />}
+                {actual.length === 1 && est.length === 0 && <circle cx={x(actual[0].year)} cy={y(actual[0].value)} r={4} className="fill-current" />}
+                {estPath.length > 1 && <path d={pathFor(estPath, x, y)} className={s.reference ? LINE_REF : cn(LINE, "[stroke-dasharray:4_4]")} />}
               </g>
             );
           })}
@@ -285,7 +293,7 @@ export default function LineChart({
           const last = pts[pts.length - 1];
           if (!last) return null;
           return (
-            <text className={css.end} x={Math.min(x(last.year) + 6, L.left + plotW)} y={y(last.value)} dominantBaseline="middle" textAnchor={x(last.year) > L.left + plotW - 50 ? "end" : "start"} dy={x(last.year) > L.left + plotW - 50 ? -8 : 0}>
+            <text className="fill-foreground font-mono text-[10px] tabular-nums" x={Math.min(x(last.year) + 6, L.left + plotW)} y={y(last.value)} dominantBaseline="middle" textAnchor={x(last.year) > L.left + plotW - 50 ? "end" : "start"} dy={x(last.year) > L.left + plotW - 50 ? -8 : 0}>
               {format(last.value)}
             </text>
           );
@@ -294,9 +302,9 @@ export default function LineChart({
         {/* crosshair and markers */}
         {hover !== null && (
           <g>
-            <line className={css.hair} x1={x(hover)} x2={x(hover)} y1={L.top} y2={L.top + plotH} />
+            <line className="stroke-muted-foreground" x1={x(hover)} x2={x(hover)} y1={L.top} y2={L.top + plotH} />
             {hoverRows.map(({ s, p }) => (
-              <circle key={s.id} cx={x(p.year)} cy={y(p.value)} r={4} className={css.marker} style={{ color: s.color }} />
+              <circle key={s.id} cx={x(p.year)} cy={y(p.value)} r={4} className="pointer-events-none fill-current stroke-background stroke-2" style={{ color: s.color }} />
             ))}
           </g>
         )}
@@ -313,30 +321,30 @@ export default function LineChart({
       </svg>
 
       {hover !== null && hoverRows.length > 0 && (
-        <div className={css.tip} style={tipRight ? { right: L.width - tipLeft + 10 } : { left: tipLeft + 10 }} role="status">
-          <div className={css.tipYear}>{hover}</div>
+        <div className="pointer-events-none absolute top-2 z-[2] min-w-[120px] max-w-[calc(50%-12px)] overflow-hidden rounded-md border bg-popover px-2 py-1 text-xs leading-[1.4] text-popover-foreground shadow-md" style={tipRight ? { right: L.width - tipLeft + 10 } : { left: tipLeft + 10 }} role="status">
+          <div className="mb-0.5 font-mono text-[10px] text-muted-foreground">{hover}</div>
           {hoverRows.map(({ s, p }) => (
-            <div key={s.id} className={css.tipRow}>
-              <i className={s.reference ? css.keyRef : css.key} style={{ color: s.color }} aria-hidden="true" />
-              <b>{format(p.value)}</b>
-              {p.est && <span className={css.est}>est</span>}
-              <span className={css.tipLabel}>{s.label}</span>
+            <div key={s.id} className="flex items-center gap-1.5 whitespace-nowrap">
+              <i className={s.reference ? KEY_REF : KEY} style={{ color: s.color }} aria-hidden="true" />
+              <b className="font-mono font-semibold tabular-nums text-foreground">{format(p.value)}</b>
+              {p.est && <span className="rounded-sm border px-[3px] text-[9px] tracking-[0.06em] text-muted-foreground uppercase">est</span>}
+              <span className="max-w-[160px] truncate text-muted-foreground">{s.label}</span>
             </div>
           ))}
         </div>
       )}
 
       {series.length + refLines.length >= 2 && (
-        <ul className={css.legend} aria-label="legend">
+        <ul className="mt-1.5 flex flex-wrap gap-x-3.5 gap-y-1 px-0.5 text-xs text-muted-foreground" aria-label="legend">
           {series.map((s) => (
-            <li key={s.id}>
-              <i className={s.reference ? css.keyRef : css.key} style={{ color: s.color }} aria-hidden="true" />
+            <li key={s.id} className="inline-flex items-center gap-1.5">
+              <i className={s.reference ? KEY_REF : KEY} style={{ color: s.color }} aria-hidden="true" />
               {s.label}
             </li>
           ))}
           {refLines.map((r, i) => (
-            <li key={`r${i}`}>
-              <i className={css.keyRef} aria-hidden="true" />
+            <li key={`r${i}`} className="inline-flex items-center gap-1.5">
+              <i className={KEY_REF} aria-hidden="true" />
               {r.label}
             </li>
           ))}

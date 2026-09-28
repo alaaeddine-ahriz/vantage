@@ -9,8 +9,17 @@ import land from "world-atlas/countries-110m.json";
 import type { LaneId } from "@/lib/types";
 import { LANES } from "@/lib/types";
 import type { Flow, GeoPoint } from "@/lib/intel-types";
+import { X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import { LANE_BY_ID, relativeTime, useMediaQuery, useNow } from "./util";
-import css from "./GlobeView.module.css";
+
+const PLACEHOLDER = "pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground";
+const DOT = "inline-block size-[7px] shrink-0 rounded-full";
+const CNT = "font-mono text-[11px] tabular-nums text-muted-foreground";
 
 export interface GlobeViewProps {
   points: GeoPoint[];
@@ -412,13 +421,17 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- theme: re-read CSS variables after the html attribute flipped */
+  /* ---------- theme: re-read CSS variables a frame later, once the parent has toggled html.dark */
   useEffect(() => {
-    const g = globeRef.current;
-    if (!g || status !== "ready") return;
-    const pal = readPalette();
-    paletteRef.current = pal;
-    applyStyle(g, pal, theme, maxCount);
+    if (status !== "ready") return;
+    const id = requestAnimationFrame(() => {
+      const g = globeRef.current;
+      if (!g) return;
+      const pal = readPalette();
+      paletteRef.current = pal;
+      applyStyle(g, pal, theme, maxCount);
+    });
+    return () => cancelAnimationFrame(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme, status]);
 
@@ -467,68 +480,90 @@ export default function GlobeView({ points, flows, items, theme, onSelectCountry
   }, [selectedPoint, items]);
 
   return (
-    <div className={css.wrap}>
-      <div ref={hostRef} className={css.canvas} />
-      {status === "loading" && <div className={css.placeholder}>loading globe</div>}
-      {status === "nowebgl" && <div className={css.placeholder}>WebGL not available</div>}
+    <div className="relative size-full min-h-[420px] overflow-hidden">
+      <div ref={hostRef} className="absolute inset-0" />
+      {status === "loading" && <div className={PLACEHOLDER}>loading globe</div>}
+      {status === "nowebgl" && <div className={PLACEHOLDER}>WebGL not available</div>}
 
       {compact && !legendOpen ? (
-        <button type="button" className={`${css.legend} ${css.legendMini}`} onClick={() => setLegendOpen(true)} aria-expanded={false} aria-label="show legend">
-          mentions {"\u00b7"} flows <span className="cnt">{flows.length}</span>
-        </button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="absolute top-2 left-2 z-[2] h-7 gap-1 bg-card/85 px-2 text-[11px] font-normal text-muted-foreground backdrop-blur"
+          onClick={() => setLegendOpen(true)}
+          aria-expanded={false}
+          aria-label="show legend"
+        >
+          mentions {"·"} flows <span className={CNT}>{flows.length}</span>
+        </Button>
       ) : (
-        <div className={css.legend} aria-hidden={!compact}>
-          <div className={css.legendTitle}>
+        <Card
+          className={cn(
+            "absolute top-2 left-2 z-[2] max-w-[200px] gap-1 rounded-md bg-card/85 px-2.5 py-2 text-[11px] leading-[1.4] text-muted-foreground shadow-none backdrop-blur",
+            compact ? "pointer-events-auto" : "pointer-events-none",
+          )}
+          aria-hidden={!compact}
+        >
+          <div className="flex items-center justify-between gap-2 text-[10px] tracking-[0.08em] text-foreground uppercase">
             mentions in window
             {compact && (
-              <button type="button" className={css.legendClose} onClick={() => setLegendOpen(false)} aria-label="hide legend">
-                x
-              </button>
+              <Button type="button" variant="ghost" size="icon" className="size-5 text-muted-foreground hover:text-foreground" onClick={() => setLegendOpen(false)} aria-label="hide legend">
+                <X className="size-3" />
+              </Button>
             )}
           </div>
-          <div className={css.lanes}>
+          <div className="flex flex-wrap gap-x-2 gap-y-[3px]">
             {LANES.map((l) => (
-              <span key={l.id} className={`${css.lane} lc-${l.id}`}>
-                <i className={css.dot} />
-                {l.short} <span className="cnt">{laneCounts[l.id]}</span>
+              <span key={l.id} className="inline-flex items-center gap-1 whitespace-nowrap">
+                <i className={DOT} style={{ background: `var(--lane-${l.id})` }} aria-hidden="true" />
+                {l.short} <span className={CNT}>{laneCounts[l.id]}</span>
               </span>
             ))}
           </div>
-          <div>flows: <span className="cnt">{flows.length}</span>{flows.length > MAX_ARCS ? ` (${MAX_ARCS} drawn)` : ""}</div>
-          <div className={css.hint}>{compact ? "tap a country to filter" : "click a country to filter"}</div>
-        </div>
+          <div>flows: <span className={CNT}>{flows.length}</span>{flows.length > MAX_ARCS ? ` (${MAX_ARCS} drawn)` : ""}</div>
+          <div className="text-[10px] opacity-85">{compact ? "tap a country to filter" : "click a country to filter"}</div>
+        </Card>
       )}
 
       {selected && (
-        <aside className={css.sheet} aria-label={`headlines for ${selectedName}`}>
-          <div className={css.sheetHead}>
-            <span className={css.sheetTitle}>{selectedName}</span>
-            <span className="cnt">{selectedPoint?.count ?? 0} mention{(selectedPoint?.count ?? 0) === 1 ? "" : "s"}</span>
+        <Card
+          className="absolute top-2 right-2 z-[3] grid w-[320px] max-w-[calc(100%-1rem)] max-h-[calc(100%-1rem)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden rounded-md bg-card/90 py-0 text-xs backdrop-blur max-[640px]:inset-x-2 max-[640px]:top-auto max-[640px]:bottom-2 max-[640px]:w-auto max-[640px]:max-w-none max-[640px]:max-h-[45%]"
+          role="complementary"
+          aria-label={`headlines for ${selectedName}`}
+        >
+          <CardHeader className="flex flex-row items-center gap-2 border-b px-2.5 py-2">
+            <span className="min-w-0 flex-1 truncate font-semibold">{selectedName}</span>
+            <Badge variant="secondary" className="h-5 px-1.5 font-mono text-[10px] font-normal tabular-nums text-muted-foreground">
+              {selectedPoint?.count ?? 0} mention{(selectedPoint?.count ?? 0) === 1 ? "" : "s"}
+            </Badge>
             {onOpenCard && (
-              <button type="button" className={css.openCard} onClick={() => onOpenCard(selected)} title="Open the country card: ratios, trends, peers">
+              <Button type="button" variant="outline" size="sm" className="h-6 border-primary px-2 text-[11px] text-primary hover:text-foreground" onClick={() => onOpenCard(selected)} title="Open the country card: ratios, trends, peers">
                 Open card
-              </button>
+              </Button>
             )}
-            <button type="button" className={css.close} aria-label="clear country filter" onClick={() => onSelectCountry?.(null)}>
-              x
-            </button>
-          </div>
-          <div className={css.list}>
-            {headlines.length === 0 && <div className={css.empty}>no headlines for this country in the window</div>}
-            {headlines.map((h) => (
-              <a key={h.id} className={`${css.row} lc-${h.lane}`} href={h.link} target="_blank" rel="noopener noreferrer">
-                <i className={css.dot} />
-                <span className={css.rowBody}>
-                  <span className={css.rowTitle}>{h.title}</span>
-                  <span className={css.rowMeta}>
-                    <span>{h.source}</span>
-                    <span className="mono">{relativeTime(h.ts, now || Date.now())}</span>
+            <Button type="button" variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" aria-label="clear country filter" onClick={() => onSelectCountry?.(null)}>
+              <X className="size-3.5" />
+            </Button>
+          </CardHeader>
+          <ScrollArea className="min-h-0">
+            <div className="py-1">
+              {headlines.length === 0 && <div className="px-2.5 py-2.5 text-muted-foreground">no headlines for this country in the window</div>}
+              {headlines.map((h) => (
+                <a key={h.id} className="flex items-start gap-[7px] px-2.5 py-[5px] leading-[1.35] hover:bg-accent/50" href={h.link} target="_blank" rel="noopener noreferrer">
+                  <i className={cn(DOT, "mt-[5px]")} style={{ background: `var(--lane-${h.lane})` }} aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span className="line-clamp-2 text-foreground">{h.title}</span>
+                    <span className="flex gap-1.5 overflow-hidden text-[11px] whitespace-nowrap text-muted-foreground">
+                      <span className="truncate">{h.source}</span>
+                      <span className="font-mono tabular-nums">{relativeTime(h.ts, now || Date.now())}</span>
+                    </span>
                   </span>
-                </span>
-              </a>
-            ))}
-          </div>
-        </aside>
+                </a>
+              ))}
+            </div>
+          </ScrollArea>
+        </Card>
       )}
     </div>
   );

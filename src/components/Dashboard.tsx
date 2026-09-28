@@ -569,7 +569,7 @@ export default function Dashboard() {
             >
               {/* the unconverted views keep their CSS Modules; the legacy scope carries the old variables and element defaults for them */}
               {prefs.view === "globe" ? (
-                <div className="legacy view-fill">
+                <div className="view-fill">
                   {snapshot ? (
                     <GlobeView points={snapshot.points} flows={snapshot.flows} items={itemMap} theme={prefs.theme} onSelectCountry={selectCountry} onOpenCard={openCard} selected={country} />
                   ) : (
@@ -577,7 +577,7 @@ export default function Dashboard() {
                   )}
                 </div>
               ) : prefs.view === "graph" ? (
-                <div className="legacy view-fill">
+                <div className="view-fill">
                   {viewSnapshot ? (
                     <GraphView nodes={graph.nodes} links={graph.links} items={itemMap} theme={prefs.theme} focus={graphFocus} onFocus={setGraphFocus} />
                   ) : (
@@ -585,7 +585,7 @@ export default function Dashboard() {
                   )}
                 </div>
               ) : prefs.view === "countries" ? (
-                <div className="legacy contents">
+                <div className="contents">
                   <CountryView
                     snapshot={snapshot}
                     items={itemMap}
@@ -602,7 +602,7 @@ export default function Dashboard() {
                   />
                 </div>
               ) : prefs.view === "intel" ? (
-                <div className="legacy contents">
+                <div className="contents">
                   <IntelPanel
                     snapshot={viewSnapshot}
                     brief={brief}

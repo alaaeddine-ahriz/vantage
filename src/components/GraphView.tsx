@@ -1,13 +1,30 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type MutableRefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type MutableRefObject } from "react";
 import type { ForceGraphProps } from "react-force-graph-2d";
 import type { LaneId } from "@/lib/types";
 import { LANES } from "@/lib/types";
 import type { EntityKind, GraphLink, GraphNode, LinkKind } from "@/lib/intel-types";
+import { ArrowRight, ChevronDown, ChevronUp, Crosshair, Maximize2, Minus, Plus, Search, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import { fold, relativeTime, useNow } from "./util";
-import s from "./GraphView.module.css";
+
+/* ---------- shared utility class strings */
+const PLACEHOLDER = "absolute inset-0 flex items-center justify-center text-xs tracking-[0.04em] text-muted-foreground";
+const DOT = "inline-block size-[7px] shrink-0 rounded-full";
+const SW = "size-[9px] shrink-0 rounded-full";
+const SW_LINE = "w-3.5 shrink-0 border-t-[1.5px]";
+const LEGEND_HEAD = "col-span-2 mt-0.5 text-[10px] tracking-[0.08em] uppercase";
+const LEGEND_ROW = "flex items-center gap-[5px] whitespace-nowrap";
+const LBL = "text-[11px] tracking-[0.08em] text-muted-foreground uppercase";
 
 /* ------------------------------------------------------------------ types */
 
@@ -59,7 +76,7 @@ type FGProps = ForceGraphProps<GNode, GLinkBase> & { ref?: MutableRefObject<FGMe
 
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
   ssr: false,
-  loading: () => <div className={s.loading}>loading graph</div>,
+  loading: () => <div className={PLACEHOLDER}>loading graph</div>,
 }) as unknown as ComponentType<FGProps>;
 
 /* -------------------------------------------------------------- constants */
@@ -179,6 +196,7 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(true);
   const now = useNow(60_000);
+  const uid = useId();
 
   /* ----- size: fill the parent */
   useLayoutEffect(() => {
@@ -193,7 +211,7 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
 
   /* ----- theme tokens */
   useEffect(() => {
-    /* a frame later so the html[data-theme] switch has been applied by the parent */
+    /* a frame later so the html.dark toggle has been applied by the parent */
     const id = requestAnimationFrame(() => setPalette(readPalette()));
     return () => cancelAnimationFrame(id);
   }, [theme]);
@@ -553,8 +571,8 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
   const focusColor = focusNode ? kindColor(focusNode) : palette.muted;
 
   return (
-    <div ref={wrapRef} className={s.wrap}>
-      <div className={s.canvas}>
+    <div ref={wrapRef} className="relative size-full min-h-[420px] overflow-hidden bg-background text-foreground">
+      <div className="absolute inset-0">
         {size.w > 0 && size.h > 0 && graphData.nodes.length > 0 && (
           <ForceGraph2D
             ref={fgRef}
@@ -591,31 +609,41 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
             onEngineStop={onEngineStop}
           />
         )}
-        {graphData.nodes.length === 0 && <div className={s.empty}>no entities in this window yet</div>}
+        {graphData.nodes.length === 0 && <div className={PLACEHOLDER}>no entities in this window yet</div>}
       </div>
 
-      <div className={s.controls}>
-        <div className={s.row}>
-          <button type="button" className={s.btn} onClick={fit} title="Fit graph to view">Fit</button>
-          <button type="button" className={s.btn} onClick={() => zoomBy(1.5)} aria-label="Zoom in">+</button>
-          <button type="button" className={s.btn} onClick={() => zoomBy(1 / 1.5)} aria-label="Zoom out">-</button>
-          <label className={s.toggle}>
-            <input type="checkbox" checked={causalOnly} onChange={(e) => setCausalOnly(e.target.checked)} />
+      <Card className="absolute top-2 left-2 z-[2] w-[232px] max-w-[calc(100%-1rem)] gap-1.5 rounded-md bg-card/85 p-2 text-xs shadow-none backdrop-blur max-[859px]:w-[200px]">
+        <div className="flex flex-wrap items-center gap-1">
+          <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={fit} title="Fit graph to view">
+            <Maximize2 className="size-3.5" /> Fit
+          </Button>
+          <Button type="button" variant="outline" size="icon" className="size-7" onClick={() => zoomBy(1.5)} aria-label="Zoom in">
+            <Plus className="size-3.5" />
+          </Button>
+          <Button type="button" variant="outline" size="icon" className="size-7" onClick={() => zoomBy(1 / 1.5)} aria-label="Zoom out">
+            <Minus className="size-3.5" />
+          </Button>
+          <Label htmlFor={`${uid}-causal`} className="ml-1 cursor-pointer gap-1.5 text-[11px] font-normal text-muted-foreground">
+            <Switch id={`${uid}-causal`} className="h-3.5 w-6 [&_[data-slot=switch-thumb]]:size-3" checked={causalOnly} onCheckedChange={setCausalOnly} />
             causal only
-          </label>
-          <button
+          </Label>
+          <Button
             type="button"
-            className={`plain ${s.collapse}`}
+            variant="ghost"
+            size="icon"
+            className="ml-auto size-6 text-muted-foreground hover:text-foreground max-[859px]:hidden"
             onClick={() => setLegendOpen((v) => !v)}
             aria-expanded={legendOpen}
             title={legendOpen ? "Hide legend" : "Show legend"}
           >
-            {legendOpen ? "▴" : "▾"}
-          </button>
+            {legendOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </Button>
         </div>
-        <div className={s.row}>
-          <input
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input
             type="text"
+            className="h-7 pl-6 text-xs md:text-xs"
             value={query}
             placeholder="find node, Enter to focus"
             onChange={(e) => setQuery(e.target.value)}
@@ -623,89 +651,102 @@ export default function GraphView({ nodes, links, items, theme, focus = null, on
             aria-label="Search nodes"
           />
         </div>
-        <div className={s.count}>
+        <div className="truncate font-mono text-[11px] tabular-nums whitespace-nowrap text-muted-foreground">
           {shownNodes} nodes {"·"} {shownLinks} links {"·"} {causalCount} causal
           {q ? ` · ${hits.size} match${hits.size === 1 ? "" : "es"}` : ""}
         </div>
         {capped && (
-          <div className={s.note}>
+          <div className="text-[11px] text-primary">
             showing top {shownNodes} of {total.nodes} nodes, {shownLinks} of {total.links} links
           </div>
         )}
         {legendOpen && (
-          <div className={s.legend}>
-            <span className={s.legendHead}>nodes</span>
-            <span><i className={s.sw} style={{ "--sw": KIND_COLOR[theme].country } as React.CSSProperties} />country</span>
-            <span><i className={s.sw} style={{ "--sw": KIND_COLOR[theme].company } as React.CSSProperties} />company</span>
-            <span><i className={s.sw} style={{ "--sw": KIND_COLOR[theme].commodity } as React.CSSProperties} />commodity</span>
-            <span><i className={s.sw} style={{ "--sw": KIND_COLOR[theme].org } as React.CSSProperties} />org / topic</span>
-            <span><i className={`${s.sw} ${s.swEvent}`} />event (lane colour)</span>
-            <span><i className={s.sw} style={{ "--sw": "transparent", border: `1px dashed ${palette.accent}` } as React.CSSProperties} />ai extracted</span>
-            <span className={s.legendHead}>links</span>
-            <span><i className={`${s.sw} ${s.swLine}`} style={{ "--sw": palette.muted } as React.CSSProperties} />co-occurs</span>
-            <span><i className={`${s.sw} ${s.swLine} ${s.swArrow}`} style={{ "--sw": palette.text } as React.CSSProperties} />causes / impacts</span>
-            <span><i className={`${s.sw} ${s.swLine} ${s.swArrow} ${s.swDashed}`} style={{ "--sw": palette.accent } as React.CSSProperties} />ai link</span>
-            <span><i className={`${s.sw} ${s.swLine}`} style={{ "--sw": "transparent" } as React.CSSProperties} />dbl-click: zoom</span>
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground max-[859px]:hidden">
+            <span className={LEGEND_HEAD}>nodes</span>
+            <span className={LEGEND_ROW}><i className={SW} style={{ background: KIND_COLOR[theme].country }} />country</span>
+            <span className={LEGEND_ROW}><i className={SW} style={{ background: KIND_COLOR[theme].company }} />company</span>
+            <span className={LEGEND_ROW}><i className={SW} style={{ background: KIND_COLOR[theme].commodity }} />commodity</span>
+            <span className={LEGEND_ROW}><i className={SW} style={{ background: KIND_COLOR[theme].org }} />org / topic</span>
+            <span className={LEGEND_ROW}><i className={cn(SW, "rounded-sm bg-[linear-gradient(90deg,var(--lane-oilgas),var(--lane-power),var(--lane-renewables))]")} />event (lane colour)</span>
+            <span className={LEGEND_ROW}><i className={cn(SW, "border border-dashed")} style={{ borderColor: palette.accent }} />ai extracted</span>
+            <span className={LEGEND_HEAD}>links</span>
+            <span className={LEGEND_ROW}><i className={SW_LINE} style={{ borderTopColor: palette.muted }} />co-occurs</span>
+            <span className={LEGEND_ROW}><i className={SW_LINE} style={{ borderTopColor: palette.text }} /><ArrowRight className="-ml-1.5 size-2.5 shrink-0" style={{ color: palette.text }} aria-hidden="true" />causes / impacts</span>
+            <span className={LEGEND_ROW}><i className={cn(SW_LINE, "border-dashed")} style={{ borderTopColor: palette.accent }} /><ArrowRight className="-ml-1.5 size-2.5 shrink-0" style={{ color: palette.accent }} aria-hidden="true" />ai link</span>
+            <span className={LEGEND_ROW}><i className={cn(SW_LINE, "border-transparent")} />dbl-click: zoom</span>
           </div>
         )}
-      </div>
+      </Card>
 
       {focusNode && (
-        <aside className={s.detail} aria-label="Node detail">
-          <div className={s.detailHead}>
-            <i
-              className={`${s.kindDot} ${focusNode.kind === "event" ? s.kindDotEvent : ""}`}
-              style={{ "--sw": focusColor } as React.CSSProperties}
-            />
-            <div className={s.detailTitle}>
+        <Card
+          className="absolute top-2 right-2 z-[3] grid w-[340px] max-w-[calc(100%-1rem)] max-h-[calc(100%-1rem)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden rounded-md bg-card/90 py-0 text-xs backdrop-blur max-[859px]:inset-x-2 max-[859px]:top-auto max-[859px]:bottom-2 max-[859px]:w-auto max-[859px]:max-w-none max-[859px]:max-h-[45%]"
+          role="complementary"
+          aria-label="Node detail"
+        >
+          <CardHeader className="flex flex-row items-start gap-1.5 border-b px-2 pt-2 pb-1.5">
+            <i className={cn("mt-1 size-[9px] shrink-0 rounded-full", focusNode.kind === "event" && "rounded-sm")} style={{ background: focusColor }} aria-hidden="true" />
+            <div className="min-w-0 flex-1 text-[13px] leading-[1.3] font-semibold [overflow-wrap:anywhere]">
               {focusNode.label}
-              <div className={s.detailMeta}>
-                <span>{KIND_LABEL[focusNode.kind]}</span>
-                {focusNode.lane && <span className={`tag lc-${focusNode.lane}`}>{focusNode.lane}</span>}
-                <span className="mono">weight {focusNode.weight}</span>
-                {focusNode.ai && <span style={{ color: palette.accent }}>ai</span>}
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
+                <Badge variant="secondary" className="h-4 px-1 text-[10px] font-normal">{KIND_LABEL[focusNode.kind]}</Badge>
+                {focusNode.lane && (
+                  <Badge variant="outline" className="h-4 px-1 text-[10px] font-normal tracking-[0.06em] uppercase" style={{ color: `var(--lane-${focusNode.lane})` }}>
+                    {focusNode.lane}
+                  </Badge>
+                )}
+                <span className="font-mono tabular-nums">weight {focusNode.weight}</span>
+                {focusNode.ai && <Badge variant="outline" className="h-4 border-primary px-1 text-[10px] font-normal text-primary">ai</Badge>}
               </div>
             </div>
-            <button type="button" className="plain" onClick={() => zoomTo(focusNode)} title="Zoom to node">{"⌖"}</button>
-            <button type="button" className="plain" onClick={() => onFocus?.(null)} aria-label="Close detail">{"×"}</button>
-          </div>
-          <div className={s.detailBody}>
-            <div className={s.section}>
-              <span className="lbl">{neighbours.length} connected</span>
-              {neighbours.length === 0 && <span className="muted">no links{causalOnly ? " (causal only)" : ""}</span>}
-              {neighbours.map(({ nb, node }, i) => (
-                <button
-                  key={`${nb.id}-${nb.kind}-${i}`}
-                  type="button"
-                  className={s.neighbour}
-                  onClick={() => onFocus?.(nb.id)}
-                  title={nb.label ?? `${nb.kind} (${nb.dir === "out" ? "outgoing" : "incoming"})`}
-                >
-                  <i className={s.dot} style={{ "--lc": kindColor(node) } as React.CSSProperties} />
-                  <span className={s.nLabel}>{node.label}</span>
-                  <span className={`${s.nKind} ${nb.ai ? s.nKindAi : ""}`}>
-                    {isCausal(nb.kind) ? (nb.dir === "out" ? `${nb.kind} →` : `← ${nb.kind}`) : nb.kind}
-                  </span>
-                  {nb.label && <span className={s.nText}>{nb.label}</span>}
-                </button>
-              ))}
+            <Button type="button" variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" onClick={() => zoomTo(focusNode)} title="Zoom to node" aria-label="Zoom to node">
+              <Crosshair className="size-3.5" />
+            </Button>
+            <Button type="button" variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onFocus?.(null)} aria-label="Close detail">
+              <X className="size-3.5" />
+            </Button>
+          </CardHeader>
+          <ScrollArea className="min-h-0">
+            <div className="flex flex-col gap-2 px-2 pt-1.5 pb-2">
+              <div className="flex flex-col gap-0.5">
+                <span className={LBL}>Connected {"·"} {neighbours.length}</span>
+                {neighbours.length === 0 && <span className="text-muted-foreground">no links{causalOnly ? " (causal only)" : ""}</span>}
+                {neighbours.map(({ nb, node }, i) => (
+                  <Button
+                    key={`${nb.id}-${nb.kind}-${i}`}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto w-full items-baseline justify-start gap-1.5 px-1 py-0.5 text-xs leading-[1.35] font-normal whitespace-normal"
+                    onClick={() => onFocus?.(nb.id)}
+                    title={nb.label ?? `${nb.kind} (${nb.dir === "out" ? "outgoing" : "incoming"})`}
+                  >
+                    <i className={cn(DOT, "relative -top-px")} style={{ background: kindColor(node) }} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-left">{node.label}</span>
+                    <span className={cn("shrink-0 font-mono text-[10px] tracking-[0.06em] uppercase", nb.ai ? "text-primary" : "text-muted-foreground")}>
+                      {isCausal(nb.kind) ? (nb.dir === "out" ? `${nb.kind} →` : `← ${nb.kind}`) : nb.kind}
+                    </span>
+                    {nb.label && <span className="min-w-0 flex-[0_1_45%] truncate text-[11px] text-muted-foreground">{nb.label}</span>}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className={LBL}>{headlines.length} headline{headlines.length === 1 ? "" : "s"}</span>
+                {headlines.length === 0 && <span className="text-muted-foreground">no headlines in the current window</span>}
+                {headlines.map((h) => (
+                  <div key={h.id} className="flex items-baseline gap-1.5 py-0.5 leading-[1.35]">
+                    <i className={cn(DOT, "relative -top-px")} style={{ background: `var(--lane-${h.lane})` }} aria-hidden="true" />
+                    <a href={h.link} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 [overflow-wrap:anywhere] hover:underline">
+                      {h.title}
+                      <span className="block text-[11px] text-muted-foreground">{h.source}</span>
+                    </a>
+                    <span className="min-w-[2.2em] shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground">{relativeTime(h.ts, now || Date.now())}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className={s.section}>
-              <span className="lbl">{headlines.length} headline{headlines.length === 1 ? "" : "s"}</span>
-              {headlines.length === 0 && <span className="muted">no headlines in the current window</span>}
-              {headlines.map((h) => (
-                <div key={h.id} className={s.headline}>
-                  <i className={`${s.dot} lc-${h.lane}`} />
-                  <a href={h.link} target="_blank" rel="noopener noreferrer">
-                    {h.title}
-                    <span className={s.hSrc}>{h.source}</span>
-                  </a>
-                  <span className={s.hTime}>{relativeTime(h.ts, now || Date.now())}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
+          </ScrollArea>
+        </Card>
       )}
     </div>
   );

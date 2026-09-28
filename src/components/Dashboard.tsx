@@ -441,6 +441,7 @@ export default function Dashboard() {
       })),
       patterns: viewSnapshot.patterns.slice(0, 12).map((p) => ({ title: p.title, detail: p.detail })),
       watchlist: prefs.watchlist,
+      model: prefs.briefModel,
     };
     briefAbort.current?.abort();
     const ctrl = new AbortController();
@@ -570,6 +571,8 @@ export default function Dashboard() {
                   briefState={briefState}
                   briefError={briefError}
                   onGenerate={onGenerate}
+                  model={prefs.briefModel}
+                  onModel={(m) => setPrefs((p) => ({ ...p, briefModel: m }))}
                   onSearch={setSearch}
                   items={itemMap}
                   watchlist={prefs.watchlist}

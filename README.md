@@ -137,6 +137,10 @@ Cost: one call per click, nothing runs automatically. Input is roughly the size 
 
 Privacy: only headline text, source names, lanes, timestamps and your watch terms leave the browser. No personal data, no saved items, no preferences.
 
+### Choosing the model
+
+The Intel header has a model dropdown (persisted in preferences): Claude Opus 5 (default), Claude Fable 5.1 (most capable), Claude Sonnet 5 (faster, cheaper) and Claude Haiku 4.5 (cheapest). The choice travels with each request as `model` and the server only accepts ids from `BRIEF_MODELS` in `src/lib/brief.ts`; add a row there to offer another model.
+
 ## Country data
 
 The Countries view is `src/components/CountryView.tsx`; the loader is `src/lib/countrydata.ts` and the catalogue is `INDICATORS` in `src/lib/country-types.ts`. Two keyless sources:

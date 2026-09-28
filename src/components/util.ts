@@ -2,6 +2,7 @@ import { createElement, useEffect, useState, type ReactNode } from "react";
 import type { LaneId, Lang, NewsItem, Quote, QuoteGroup, Region, SourceStatus } from "@/lib/types";
 import { LANES, LANGS, REGIONS } from "@/lib/types";
 import { SOURCES } from "@/lib/sources";
+import { pickModel } from "@/lib/brief";
 
 /** NewsItem enriched at merge time so render loops never parse or fold text. */
 export interface Item extends NewsItem {
@@ -73,6 +74,8 @@ export interface Prefs {
   theme: Theme;
   /** Countries overlaid on the country card, ISO2 upper case, at most COMPARE_MAX. */
   compare: string[];
+  /** Model id for the AI brief; validated against BRIEF_MODELS. */
+  briefModel: string;
   /** Last tab opened on the country card. */
   countryTab?: string;
 }
@@ -94,6 +97,7 @@ export const DEFAULT_PREFS: Prefs = {
   watchOnly: false,
   theme: "dark",
   compare: [],
+  briefModel: "claude-opus-5",
 };
 
 export const REGION_CODE: Record<Region, string> = {
@@ -391,6 +395,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
     watchOnly: r.watchOnly === true,
     theme: r.theme === "light" ? "light" : "dark",
     compare: sanitizeCompare(r.compare),
+    briefModel: pickModel(r.briefModel),
     ...(typeof r.countryTab === "string" && r.countryTab ? { countryTab: r.countryTab } : {}),
   };
 }

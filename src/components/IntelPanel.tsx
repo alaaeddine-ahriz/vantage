@@ -1,4 +1,5 @@
 "use client";
+import { BRIEF_MODELS } from "@/lib/brief";
 
 import { memo, useMemo, useState, type ReactNode } from "react";
 import type { Brief, IntelSnapshot, Pattern } from "@/lib/intel-types";
@@ -14,6 +15,9 @@ export interface IntelPanelProps {
   briefState: BriefState;
   briefError?: string;
   onGenerate: () => void;
+  /** Selected model id and setter for the model dropdown. */
+  model: string;
+  onModel: (id: string) => void;
   onSearch: (q: string) => void;
   items: Map<string, ViewItem>;
   watchlist: string[];
@@ -160,6 +164,14 @@ function IntelPanelBase(p: IntelPanelProps) {
         )}
         {b?.mock && <span className={s.note}>sample brief: set ANTHROPIC_API_KEY on Vercel for live analysis</span>}
         {p.briefState === "error" && p.briefError && <span className={s.error} role="alert">{p.briefError}</span>}
+        <label className={`${s.note} ${s.modelPick}`}>
+          model
+          <select value={p.model} onChange={(e) => p.onModel(e.target.value)} disabled={loading} aria-label="Model for the AI brief" title={BRIEF_MODELS.find((m) => m.id === p.model)?.note}>
+            {BRIEF_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+        </label>
         <button type="button" className={`chip ${s.gen}`} onClick={p.onGenerate} disabled={loading || !p.snapshot} title="Send the current headlines to the model for an analyst brief">
           {loading && <span className={s.spinner} aria-hidden="true" />}
           {loading ? "generating" : "Generate AI brief"}

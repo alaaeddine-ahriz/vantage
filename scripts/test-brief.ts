@@ -3,7 +3,7 @@
  * mock brief and response normalisation. Run with `npm test` (tsx, no network).
  */
 import assert from "node:assert/strict";
-import { BRIEF_SCHEMA, buildMockBrief, entityWords, normalizeBrief, validateBriefRequest } from "../src/lib/brief";
+import { BRIEF_MODEL, BRIEF_SCHEMA, buildMockBrief, entityWords, normalizeBrief, pickModel, validateBriefRequest } from "../src/lib/brief";
 import type { BriefRequest, LinkKind } from "../src/lib/intel-types";
 import { mockFeeds } from "../src/lib/mock";
 import { LANES } from "../src/lib/types";
@@ -182,4 +182,17 @@ process.exitCode = failed ? 1 : 0;
   };
   walk(BRIEF_SCHEMA, "root");
   console.log("ok - schema uses only keywords structured outputs accept");
+}
+
+// Model selection: allowlisted ids pass through, anything else is rejected or falls back to the default.
+{
+  const base = { window: "24h", items: [{ id: "a", title: "OPEC+ extends cuts", source: "x", publishedAt: "2026-09-28T09:00:00Z", lane: "oilgas", region: "global" }] };
+  assert.equal(validateBriefRequest({ ...base, model: "claude-sonnet-5" })?.model, "claude-sonnet-5");
+  assert.equal(validateBriefRequest({ ...base, model: "gpt-9" }), null);
+  assert.equal(validateBriefRequest({ ...base, model: 42 }), null);
+  assert.equal(validateBriefRequest(base)?.model, undefined);
+  assert.equal(pickModel("claude-haiku-4-5"), "claude-haiku-4-5");
+  assert.equal(pickModel("nope"), BRIEF_MODEL);
+  assert.equal(pickModel(undefined), BRIEF_MODEL);
+  console.log("ok - brief model allowlist");
 }

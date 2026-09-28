@@ -109,6 +109,8 @@ export interface BriefRequest {
   /** Optional local patterns so the model can confirm, refute or extend them. */
   patterns?: { title: string; detail: string }[];
   watchlist?: string[];
+  /** Model id chosen in the UI; the server validates it against its allowlist. */
+  model?: string;
 }
 
 export interface BriefLaneRecap {

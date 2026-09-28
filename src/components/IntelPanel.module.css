@@ -81,3 +81,6 @@
   .colhead { position: static; }
   .head .gen, .chips button, .toggle, .watch .chip button { min-height: 32px; }
 }
+
+.modelPick { display: inline-flex; align-items: center; gap: 6px; }
+.modelPick select { font: inherit; font-size: 11px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 2px 4px; }

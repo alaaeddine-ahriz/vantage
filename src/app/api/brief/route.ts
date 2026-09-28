@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { BRIEF_MODEL, BRIEF_SCHEMA, buildMockBrief, normalizeBrief, systemPrompt, userContent, validateBriefRequest } from "@/lib/brief";
+import { BRIEF_MODEL, BRIEF_SCHEMA, pickModel, buildMockBrief, normalizeBrief, systemPrompt, userContent, validateBriefRequest } from "@/lib/brief";
 import type { Brief } from "@/lib/intel-types";
 
 export const runtime = "nodejs";
@@ -36,7 +36,7 @@ export async function POST(req: Request): Promise<Response> {
   const client = new Anthropic({ apiKey, timeout: 110_000, maxRetries: 1 });
   try {
     const response = await client.messages.create({
-      model: BRIEF_MODEL,
+      model: pickModel(request.model),
       max_tokens: 8000,
       thinking: { type: "adaptive" },
       system: [{ type: "text", text: systemPrompt(request.lang ?? "en"), cache_control: { type: "ephemeral" } }],
@@ -51,7 +51,7 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       return json({ error: response.stop_reason === "max_tokens" ? "brief truncated: fewer items or a shorter window" : "model returned no JSON" }, 502);
     }
-    const brief: Brief | null = normalizeBrief(parsed, request, { generatedAt: new Date().toISOString(), model: response.model || BRIEF_MODEL });
+    const brief: Brief | null = normalizeBrief(parsed, request, { generatedAt: new Date().toISOString(), model: response.model || pickModel(request.model) });
     if (!brief) return json({ error: "model output did not match the brief shape" }, 502);
     return json(brief);
   } catch (err) {

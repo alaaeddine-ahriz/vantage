@@ -8,6 +8,18 @@ import { LANES, type LaneId } from "./types";
  */
 
 export const BRIEF_MODEL = "claude-opus-5";
+
+/** Models the UI may pick from, with the reference list prices (USD per million tokens, input / output). */
+export const BRIEF_MODELS: { id: string; label: string; note: string }[] = [
+  { id: "claude-opus-5", label: "Claude Opus 5", note: "default, $5 / $25" },
+  { id: "claude-fable-5-1", label: "Claude Fable 5.1", note: "most capable, $10 / $50" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "faster, $2 / $10" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "cheapest, $1 / $5" },
+];
+export const BRIEF_MODEL_IDS = new Set(BRIEF_MODELS.map((m) => m.id));
+export function pickModel(v: unknown): string {
+  return typeof v === "string" && BRIEF_MODEL_IDS.has(v) ? v : BRIEF_MODEL;
+}
 export const MAX_ITEMS = 400;
 const MAX_PATTERNS_IN = 40;
 const MAX_WATCH_IN = 200;
@@ -72,7 +84,9 @@ export function validateBriefRequest(raw: unknown): BriefRequest | null {
     watchlist = (r.watchlist as string[]).map((w) => w.trim().slice(0, 60)).filter(Boolean).slice(0, MAX_WATCH_IN);
   }
 
-  return { window, lang, items, ...(patterns ? { patterns } : {}), ...(watchlist ? { watchlist } : {}) };
+  if (r.model !== undefined && (typeof r.model !== "string" || !BRIEF_MODEL_IDS.has(r.model))) return null;
+
+  return { window, lang, items, ...(patterns ? { patterns } : {}), ...(watchlist ? { watchlist } : {}), ...(r.model ? { model: r.model } : {}) };
 }
 
 // ------------------------------------------------------------------ prompt
